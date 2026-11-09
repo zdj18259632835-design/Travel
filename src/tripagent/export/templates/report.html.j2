@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ title }}</title>
+<style>
+  :root { --ink:#1f2933; --sub:#5c6a78; --line:#e4e8ec; --accent:#0b7285; --warn:#e8590c; --danger:#c92a2a; --ok:#2f9e44; }
+  * { box-sizing: border-box; }
+  body { margin:0; padding:20px 16px 60px; color:var(--ink); background:#f6f7f9;
+         font:15px/1.65 -apple-system,"Segoe UI","Microsoft YaHei","PingFang SC",sans-serif; }
+  .wrap { max-width: 860px; margin:0 auto; }
+  h1 { font-size:26px; margin:0 0 6px; letter-spacing:.5px; }
+  h2 { font-size:18px; margin:34px 0 12px; padding-left:10px; border-left:4px solid var(--accent); }
+  h3 { font-size:16px; margin:0 0 4px; }
+  .meta { color:var(--sub); font-size:13px; margin-bottom:18px; }
+  .card { background:#fff; border:1px solid var(--line); border-radius:12px; padding:16px 18px; margin-bottom:14px; }
+  .banner { background:#fff4e6; border:1px solid #ffd8a8; border-radius:12px; padding:14px 18px; margin-bottom:16px; }
+  .banner pre { margin:8px 0 0; white-space:pre-wrap; font-family:inherit; font-size:14px; color:var(--danger); }
+  table { width:100%; border-collapse:collapse; font-size:14px; }
+  th,td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { color:var(--sub); font-weight:600; background:#fafbfc; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; }
+  .kpi { background:#fff; border:1px solid var(--line); border-radius:10px; padding:10px 12px; }
+  .kpi b { display:block; font-size:20px; color:var(--accent); }
+  .kpi span { font-size:12px; color:var(--sub); }
+  .day { background:#fff; border:1px solid var(--line); border-radius:12px; padding:16px 18px; margin-bottom:14px; }
+  .day-head { display:flex; flex-wrap:wrap; gap:10px; align-items:baseline; justify-content:space-between; }
+  .tag { display:inline-block; font-size:12px; padding:2px 8px; border-radius:999px; background:#eef1f4; color:var(--sub); }
+  .tag.indoor { background:#e7f5ff; color:#1971c2; } .tag.night { background:#f3e8ff; color:#862e9c; }
+  .tag.risk-警告 { background:#fff4e6; color:var(--warn); } .tag.risk-危险 { background:#ffe3e3; color:var(--danger); }
+  .tag.risk-关注 { background:#fff9db; color:#9a7b00; }
+  ol.slots { margin:12px 0 0; padding-left:0; list-style:none; }
+  ol.slots li { padding:10px 0 10px 14px; border-left:2px solid var(--line); margin-bottom:8px; }
+  ol.slots li.night { border-left-color:#cda4f0; }
+  .stime { font-variant-numeric:tabular-nums; color:var(--accent); font-weight:600; font-size:13px; }
+  .why { color:var(--sub); font-size:13px; margin-top:3px; }
+  .pit { color:var(--warn); font-size:13px; margin-top:3px; }
+  .res { color:var(--danger); font-size:13px; margin-top:3px; }
+  svg.route { width:100%; max-width:360px; height:auto; background:#fbfcfd; border:1px dashed var(--line); border-radius:8px; }
+  ul.packing { columns:2; gap:22px; margin:0; padding-left:18px; }
+  ul.plain { margin:0; padding-left:18px; }
+  .fail { color:var(--danger); }
+  footer { color:var(--sub); font-size:12px; margin-top:28px; text-align:center; }
+  @media print { body { background:#fff; padding:0; } .card,.day { break-inside:avoid; border-color:#ccc; } }
+  @media (max-width:520px) { ul.packing { columns:1; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>{{ title }}</h1>
+  <div class="meta">{{ describe }} · 生成于 {{ generated }} · v{{ version }}
+    {% if sources %} · 数据源：{{ sources | join('、') }}{% endif %}
+  </div>
+
+  {% if blocking %}
+  <div class="banner"><b>⛔ 天气结论：不建议按原计划出行</b><pre>{{ blocking }}</pre></div>
+  {% endif %}
+
+  {% if narrative %}<div class="card">{{ narrative }}</div>{% endif %}
+
+  {% if dimensions %}
+  <h2>方案校验记分卡</h2>
+  <div class="grid">
+    <div class="kpi"><b>{{ pass_rate }}</b><span>总体通过率 · {{ verdict }}</span></div>
+    {% for d in dimensions %}
+    <div class="kpi"><b>{{ d.rate }}</b><span>{{ d.name }}（{{ d.count }} 项）</span></div>
+    {% endfor %}
+  </div>
+  <div class="card">
+    <table>
+      <tr><th>结果</th><th>约束</th><th>维度</th><th>说明与建议</th></tr>
+      {% for c in checks %}
+      <tr>
+        <td>{% if c.passed %}✅{% else %}⚠️{% endif %}</td>
+        <td>{{ c.name }}</td>
+        <td>{{ c.kind }}</td>
+        <td>{% if not c.passed %}<span class="fail">{{ c.detail }}</span>
+          {% if c.hint %}<br>建议：{{ c.hint }}{% endif %}{% else %}通过{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </table>
+  </div>
+  {% endif %}
+
+  <h2>逐日安排</h2>
+  {% for day in days %}
+  <div class="day">
+    <div class="day-head">
+      <div>
+        <h3>Day {{ day.index }} · {{ day.date }} {{ day.weekday }}　{{ day.weather }}</h3>
+        <div class="why">{{ day.theme }}</div>
+      </div>
+      <div>
+        {% if day.risk %}<span class="tag risk-{{ day.risk }}">{{ day.risk }}</span>{% endif %}
+        <span class="tag">花费 {{ day.cost }}</span>
+        <span class="tag">通勤 {{ day.transit }} 分</span>
+      </div>
+    </div>
+    {% if day.svg_raw %}{{ day.svg_raw | safe }}{% endif %}
+    {% if day.risk_advice %}
+      <div class="why">{% for a in day.risk_advice %}· {{ a }}<br>{% endfor %}</div>
+    {% endif %}
+    <ol class="slots">
+      {% for s in day.slots %}
+      <li class="{% if s.type in ('夜间娱乐','观看演出') %}night{% endif %}">
+        <div><span class="stime">{{ s.time }}</span>　<b>{{ s.title }}</b>
+          <span class="tag {% if s.indoor == '室内' %}indoor{% endif %}">{{ s.indoor }}</span>
+          {% if s.rating %}<span class="tag">评分 {{ s.rating }}</span>{% endif %}
+          <span class="tag">{{ s.cost }}</span>
+        </div>
+        {% if s.transit %}<div class="why">↳ 到达：{{ s.transit }}</div>{% endif %}
+        {% if s.reservation %}<div class="res">⏰ {{ s.reservation }}</div>{% endif %}
+        {% if s.why %}<div class="why">为什么是它：{{ s.why }}</div>{% endif %}
+        {% if s.pitfalls %}<div class="pit">避坑：{{ s.pitfalls | join('；') }}</div>{% endif %}
+        {% if s.photos %}<div class="why">出机：{{ s.photos | join('；') }}</div>{% endif %}
+      </li>
+      {% endfor %}
+    </ol>
+    {% if day.notes %}<div class="why">{% for n in day.notes %}· {{ n }}<br>{% endfor %}</div>{% endif %}
+  </div>
+  {% endfor %}
+
+  <h2>预算</h2>
+  <div class="card">
+    <table>
+      {% for b in budget %}
+      <tr><th style="width:38%">{{ b.name }}</th><td>
+        <b>{{ b.value }}</b>{% if b.warn %} <span class="fail">（已超预算）</span>{% endif %}
+      </td></tr>
+      {% endfor %}
+    </table>
+  </div>
+
+  {% if intercity %}
+  <h2>跨城交通</h2>
+  <div class="card"><ul class="plain">
+    {% for l in intercity %}<li>{{ l.from_city }} → {{ l.to_city }}　{{ l.dep_time }}<br><span class="why">{{ l.note }}</span></li>{% endfor %}
+  </ul></div>
+  {% endif %}
+
+  {% if packing %}
+  <h2>行前清单</h2>
+  <div class="card"><ul class="packing">
+    {% for p in packing %}<li>{{ p }}</li>{% endfor %}
+  </ul></div>
+  {% endif %}
+
+  {% if warnings %}
+  <h2>已知局限</h2>
+  <div class="card"><ul class="plain">
+    {% for w in warnings %}<li>{{ w }}</li>{% endfor %}
+  </ul></div>
+  {% endif %}
+
+  <footer>天气：Open-Meteo 16 天预报 + 中国气象局/中央气象台实时预警 · 地点：高德 POI 或本地知识库 · 口碑：通义千问联网归纳</footer>
+</div>
+</body>
+</html>

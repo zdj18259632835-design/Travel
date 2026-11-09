@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TripAgent · 山水行旅 — 先看天气，再论行程</title>
+<meta name="description" content="TripAgent：输入城市与天数，先看 16 天预报与气象预警，再给出能出门的行程。天池 2026 Qoder 高校创造力大赛 LifeHack 赛道作品。">
+<style>
+:root{
+  --ink:#26332f; --pine:#3d6b5a; --pine-d:#2f5d4e; --mist:#6b9b7c;
+  --paper:#f6f4ec; --card:#fffdf7; --ochre:#b4552f; --line:rgba(61,107,90,.18);
+  --warn:#9a6b1f; --danger:#9a3a26;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; color:var(--ink); line-height:1.65;
+  font-family:"PingFang SC","Microsoft YaHei","Source Han Sans SC",sans-serif;
+  background:
+    radial-gradient(1100px 380px at 10% -6%, rgba(122,166,148,.22), transparent 60%),
+    radial-gradient(820px 340px at 92% -4%, rgba(93,138,166,.16), transparent 58%),
+    var(--paper);
+}
+.wrap{max-width:1080px;margin:0 auto;padding:0 18px 64px}
+header.hero{position:relative;padding:26px 0 6px;border-bottom:1px solid var(--line);margin-bottom:22px}
+h1{font-family:"STZhongsong","SimSun","Songti SC",serif;font-size:1.85rem;letter-spacing:.06em;margin:0}
+.seal{display:inline-block;margin-left:10px;padding:2px 8px;border-radius:4px;background:var(--ochre);
+  color:#fbf7ef;font-size:.72rem;letter-spacing:.14em;vertical-align:middle;font-family:"STZhongsong","SimSun",serif}
+.verse{margin-top:6px;color:#5d6f68;font-size:.86rem;letter-spacing:.12em;font-family:"STKaiti","KaiTi","Kaiti SC",serif}
+.ridge{display:block;width:100%;height:64px;margin-top:8px}
+h2{font-family:"STZhongsong","SimSun",serif;font-size:1.18rem;letter-spacing:.06em;margin:30px 0 10px;color:var(--pine-d)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px;box-shadow:0 1px 0 rgba(61,107,90,.10)}
+form.tool{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end}
+label{display:block;font-size:.82rem;color:#4a5b54;margin-bottom:4px}
+input[type=text],select{padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:#fff;
+  font-size:1rem;color:var(--ink);min-width:180px}
+input[type=range]{width:150px;accent-color:var(--ochre)}
+button{font:inherit;padding:10px 20px;border-radius:10px;border:1px solid var(--pine);
+  background:linear-gradient(180deg,#47796a,#35604f);color:#fbf7ef;letter-spacing:.08em;cursor:pointer}
+button:hover{background:linear-gradient(180deg,#4f8878,#3b6b58)}
+button:disabled{opacity:.55;cursor:progress}
+.hint{font-size:.82rem;color:#6b7d76;margin-top:8px}
+.status{margin-top:14px;font-size:.9rem;color:var(--pine-d)}
+.group{margin-top:18px}
+.group>b{font-family:"STZhongsong","SimSun",serif;letter-spacing:.1em}
+.g-outdoor>b{color:var(--pine-d)} .g-indoor>b{color:var(--warn)} .g-avoid>b{color:var(--danger)}
+.day{border-left:3px solid var(--mist);border-radius:10px;background:rgba(255,255,255,.72);
+  border-top:1px solid var(--line);border-right:1px solid var(--line);border-bottom:1px solid var(--line);
+  padding:10px 13px;margin:9px 0}
+.g-indoor .day{border-left-color:#d0a13a} .g-avoid .day{border-left-color:var(--danger)}
+.day .top{display:flex;flex-wrap:wrap;gap:8px;align-items:baseline}
+.date{font-variant-numeric:tabular-nums;color:var(--pine-d);font-weight:700}
+.cond{font-weight:700}
+.sig{font-size:.8rem;color:#6b7d76}
+.adv{margin-top:5px;font-size:.92rem}
+.tips{margin-top:4px;font-size:.82rem;color:#5d6f68}
+.bar{height:6px;border-radius:999px;background:rgba(61,107,90,.13);margin-top:7px;overflow:hidden}
+.bar i{display:block;height:100%;background:linear-gradient(90deg,#8fb7a3,#3d6b5a)}
+.alarm{border-left:3px solid var(--ochre);background:rgba(180,85,47,.07);padding:8px 12px;border-radius:8px;margin:7px 0;font-size:.9rem}
+ul.feat{padding-left:1.1em;margin:6px 0}
+ul.feat li{margin:7px 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin-top:12px}
+.mini{background:rgba(255,255,255,.66);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.mini h3{margin:0 0 4px;font-size:.98rem;color:var(--pine-d);font-family:"STZhongsong","SimSun",serif}
+.mini p{margin:0;font-size:.86rem;color:#4a5b54}
+footer{margin-top:34px;padding-top:14px;border-top:1px solid var(--line);font-size:.8rem;color:#6b7d76}
+code{background:rgba(61,107,90,.08);padding:1px 6px;border-radius:6px;font-size:.86em}
+@media (max-width:640px){input[type=text],select{min-width:140px}.wrap{padding:0 12px 48px}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header class="hero">
+  <h1>TripAgent<span class="seal">山水行旅</span></h1>
+  <div class="verse">远上寒山、青绿千载 —— 先看天气，再论行程</div>
+  <svg class="ridge" viewBox="0 0 1200 90" preserveAspectRatio="none" aria-hidden="true">
+    <path d="M0 88 L120 46 L210 66 L330 18 L450 62 L560 34 L690 74 L810 28 L940 64 L1060 40 L1200 78 L1200 90 L0 90 Z"
+          fill="rgba(61,107,90,.16)"/>
+    <path d="M0 88 L160 60 L280 78 L420 44 L540 72 L680 50 L820 80 L960 56 L1100 76 L1200 62 L1200 90 L0 90 Z"
+          fill="rgba(61,107,90,.26)"/>
+  </svg>
+</header>
+
+<h2>先看天气再决定：这几天到底能不能出门</h2>
+<div class="card">
+  <form class="tool" id="f">
+    <div>
+      <label for="city">城市 / 县 / 乡镇</label>
+      <input type="text" id="city" name="city" value="泉州" autocomplete="off"
+             placeholder="如：阿勒泰、泰宁县、凤凰县沱江镇">
+    </div>
+    <div>
+      <label for="days">看几天：<span id="daysLabel">5</span> 天（行程天数 + 2 天缓冲）</label>
+      <input type="range" id="days" name="days" min="1" max="16" value="5">
+    </div>
+    <button type="submit" id="go">查天气与预警</button>
+  </form>
+  <div class="hint">数值预报来自 Open-Meteo（免密钥公开接口），灾害预警来自中国气象局公开接口。
+    结论由规则引擎现场判定，不是模型即兴发挥，因此同一城市同一天每次结果一致。</div>
+  <div class="status" id="status" role="status" aria-live="polite"></div>
+  <div id="out"></div>
+</div>
+
+<h2>完整规划引擎的状态</h2>
+<div class="card" id="engine">正在检测……</div>
+
+<h2>它和其他 AI 旅行攻略的差别</h2>
+<ul class="feat">
+  <li><b>天气是一等约束，不是装饰。</b>极端天气直接给「不建议出行」并推荐改期窗口；可救的情况自动把户外换成室内，
+      并把有限的室内名额留给最恶劣的那天。</li>
+  <li><b>每条推荐都能回溯。</b>评分、人均、营业时间、预约窗口、避坑点都带来源；拿不到就写「价格待确认」，
+      而不是编一个 ¥0 或一句「值得一去」。</li>
+  <li><b>方案自带记分卡。</b>环境事实 / 常识约束 / 用户硬约束三个维度分别给通过率（约束分类参考 TravelPlanner）。</li>
+  <li><b>生活娱乐是主战场。</b>酒吧、KTV、夜店、剧场、乐园、密室有独立类目、准入门槛与「散场能不能回酒店」的夜间校验。</li>
+  <li><b>按同行人群改写理由。</b>亲子写孩子能收获什么，情侣写靠什么增进关系，长辈写体力与舒适度怎么被照顾。</li>
+</ul>
+
+<div class="grid">
+  <div class="mini"><h3>先看天气</h3><p>舒适指数 + 12 类风险因子 + 官方预警按行政区过滤，输出「能全天户外 / 建议室内 / 别出门」三堆结论。</p></div>
+  <div class="mini"><h3>再排行程</h3><p>确定性装配 + 事后校验：贪心少折返、餐段只在午晚窗口、预算按「分」累加，装不下就丢最低分项。</p></div>
+  <div class="mini"><h3>口碑归纳</h3><p>小红书/抖音对个人无接口，改用通义千问联网检索公开内容归纳，显式标注来源与置信度，不确定的字段留空。</p></div>
+  <div class="mini"><h3>能降级</h3><p>每个外部数据源都有本地兜底：零密钥、断网也能跑完整流程，用于现场演示与回归测试。</p></div>
+</div>
+
+<footer>
+  天池 2026 Qoder 高校创造力大赛 · LifeHack 生活娱乐赛道作品。
+  数据来源：Open-Meteo 数值预报 · 中国气象局公开预警 · 高德开放平台（地点/评分/营业时间/实拍图）· 通义千问（联网口碑归纳）。
+  本页只做公开信息查询，不收集任何个人数据。
+</footer>
+</div>
+
+<script>
+const GROUPS = {
+  outdoor: ["🌤 适合全天户外", "g-outdoor"],
+  indoor:  ["🏛 建议以室内为主", "g-indoor"],
+  avoid:   ["⛔ 不建议出行", "g-avoid"],
+};
+const el = (tag, cls, text) => {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined && text !== null) n.textContent = String(text);
+  return n;
+};
+
+document.getElementById("days").addEventListener("input", (e) => {
+  document.getElementById("daysLabel").textContent = e.target.value;
+});
+
+function renderDays(list) {
+  const out = document.getElementById("out");
+  out.textContent = "";
+  for (const key of ["outdoor", "indoor", "avoid"]) {
+    const rows = list.filter((d) => d.verdict === key);
+    if (!rows.length) continue;
+    const [title, cls] = GROUPS[key];
+    const box = el("div", "group " + cls);
+    box.appendChild(el("b", null, title));
+    for (const d of rows) {
+      const card = el("div", "day");
+      const top = el("div", "top");
+      top.appendChild(el("span", "date", `${d.date.slice(5).replace("-", "/")} ${d.weekday}`));
+      top.appendChild(el("span", "cond", `${d.text} ${d.tmin === null ? "气温未知" : Math.round(d.tmin) + "~" + Math.round(d.tmax) + "℃"}`));
+      top.appendChild(el("span", "sig", (d.signals || []).join("、")));
+      card.appendChild(top);
+      card.appendChild(el("div", "adv", "→ " + d.advice));
+      if (d.tips && d.tips.length) card.appendChild(el("div", "tips", "⚕️ " + d.tips.join("　·　")));
+      const bar = el("div", "bar");
+      const fill = el("i");
+      fill.style.width = (d.comfort || 0) + "%";
+      bar.appendChild(fill);
+      card.appendChild(bar);
+      box.appendChild(card);
+    }
+    out.appendChild(box);
+  }
+}
+
+function renderAlarms(alarms) {
+  if (!alarms || !alarms.length) return;
+  const box = el("div", "group");
+  box.appendChild(el("b", null, "当前生效气象预警"));
+  for (const a of alarms) {
+    box.appendChild(el("div", "alarm", `[${a.level || "-"}] ${a.type} — ${a.title}${a.scope === "province" ? "（省级波及，非本地发布）" : ""}`));
+  }
+  document.getElementById("out").appendChild(box);
+}
+
+async function query(event) {
+  event.preventDefault();
+  const btn = document.getElementById("go");
+  const status = document.getElementById("status");
+  const city = document.getElementById("city").value.trim();
+  const days = document.getElementById("days").value;
+  if (!city) { status.textContent = "请先填一个城市名。"; return; }
+  btn.disabled = true;
+  status.textContent = `正在查 ${city} 的未来 ${days} 天预报与实时预警……`;
+  try {
+    const res = await fetch(`/functions/v1/app?action=weather&city=${encodeURIComponent(city)}&days=${days}`);
+    const data = await res.json();
+    if (!data.ok) throw new Error(data.error || `请求失败（HTTP ${res.status}）`);
+    status.textContent = `${data.province || ""} ${data.city} · ${data.list.length} 天 · 来源：${data.source}`;
+    renderDays(data.list);
+    renderAlarms(data.alarms);
+  } catch (err) {
+    status.textContent = "没能拿到数据：" + err.message + "（可能是上游接口暂时不可用，稍后再试）";
+    document.getElementById("out").textContent = "";
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+document.getElementById("f").addEventListener("submit", query);
+
+async function checkEngine() {
+  const box = document.getElementById("engine");
+  try {
+    const res = await fetch("/functions/v1/app?action=health");
+    const data = await res.json();
+    box.textContent = "";
+    if (data.python_configured) {
+      box.appendChild(el("p", null, "✅ 完整规划引擎已接入：可直接在本页发起「城市 + 天数 + 人群」的完整行程规划。"));
+    } else {
+      box.appendChild(el("p", null,
+        "本页已上线的是「天气决策」这一层（不需要任何密钥，立刻可用）。"));
+      box.appendChild(el("p", null,
+        "完整规划引擎是一个常驻 Python 服务（Streamlit + FastAPI），Qoder Sites 的函数运行时只跑 TypeScript，" +
+        "因此它托管在外部 Python 服务上；接入后本段会自动变成可用入口，无需改这个页面。"));
+      box.appendChild(el("p", null,
+        "本地运行完整应用：在项目根目录执行 .venv\\Scripts\\python.exe -m streamlit run app.py，浏览器打开 http://localhost:8501"));
+    }
+  } catch (err) {
+    box.textContent = "引擎状态检测失败：" + err.message;
+  }
+}
+
+checkEngine();
+document.getElementById("f").dispatchEvent(new Event("submit"));
+</script>
+</body>
+</html>

@@ -1,0 +1,138 @@
+"""界面冒烟测试：真的把 app.py 跑一遍，而不是只做语法检查。
+
+为什么需要这个文件：用户报过一次 `NameError: name 'p' is not defined`——
+`py_compile` 完全抓不到这类错误（语法合法、运行时才炸），
+而 Streamlit 的 AppTest 会真正执行脚本并收集异常，正好补上这个洞。
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import sys
+from datetime import date, timedelta
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(ROOT))
+
+os.environ["TRIPAGENT_OFFLINE"] = "1"
+os.environ["DASHSCOPE_API_KEY"] = ""
+os.environ["AMAP_KEY"] = ""
+os.environ["QWEATHER_KEY"] = ""
+
+
+def _make_plan():
+    """离线生成一份真实结构的行程，喂给界面。"""
+    from tripagent.agents.service import TripService
+    from tripagent.config import reload_settings
+
+    svc = TripService(reload_settings())
+    return svc.plan_trip("成都 3天 带一个小孩 爱吃火锅 想体验夜生活 预算2400")
+
+
+@pytest.fixture(scope="module")
+def outcome():
+    return _make_plan()
+
+
+def test_app_renders_without_exception(outcome):
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=120)
+    at.run()
+    assert not at.exception, f"首次渲染就抛异常：{[e.value for e in at.exception]}"
+
+    # 把已生成的行程塞进 session_state，强制走「结果渲染」分支——
+    # 用户那次报错正是发生在这里
+    at.session_state["outcome"] = outcome
+    at.session_state["svc"] = None
+    at.run()
+    bad = [e.value for e in at.exception]
+    assert not bad, f"渲染行程结果时抛异常：{bad}"
+
+
+def test_weather_panel_has_no_numeric_table(outcome):
+    """天气必须给结论而不是表格：用户明确要求去掉毫米数与"-"占位。"""
+    from tripagent.core.weather_risk import window_verdicts
+
+    req = outcome.request
+    window = [req.start_date + timedelta(days=i) for i in range(req.days)]
+    groups = window_verdicts(outcome.weather, window)
+    for key in ("outdoor", "indoor", "avoid"):
+        for v in groups[key]:
+            assert v["verdict"] in ("outdoor", "indoor", "avoid")
+            assert "mm" not in v["why"], "结论里不该出现毫米数"
+            assert "-" != v["headline"].strip()
+    assert sum(len(groups[k]) for k in ("outdoor", "indoor", "avoid")) == len(window)
+
+
+def test_slots_expose_time_band_not_clock(outcome):
+    """时段词必须覆盖所有安排，且顺序符合 上午→下午→傍晚→晚上。"""
+    plan = outcome.plan
+    order = ["清晨", "早上", "上午", "中午", "下午", "傍晚", "晚上", "深夜"]
+    for day in plan.days:
+        bands = [b for b, _ in day.by_band()]
+        assert bands, f"Day{day.index} 没有时段分组"
+        assert bands == sorted(bands, key=order.index), f"时段顺序乱了：{bands}"
+
+
+def test_rendered_app_shows_no_clock_ranges(outcome):
+    """用户连着两次反馈"09:00-11:00 还在"：旧的逐条卡片残留在 app.py 里。
+
+    只测 day_panel 挡不住这种"新视图旁边又渲染了一遍旧视图"，
+    所以这里跑真实的 app.py，检查旧卡片的时间列有没有复活。
+    口碑正文里的"7:30-9:30 熊猫活跃"是描述性文字，不在禁止范围内。
+    """
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=120)
+    at.session_state["outcome"] = outcome
+    at.session_state["svc"] = None
+    at.run()
+    assert not at.exception
+    blobs = [str(getattr(m, "value", "")) for m in at.markdown]
+    hits = [b[:120] for b in blobs if '<span class="t">' in b]
+    assert not hits, f"界面仍在按钟点列出行程：{hits}"
+
+
+def test_day_panel_free_of_broken_culture_fields(outcome):
+    """文旅字段错位时界面会输出「避坑：0.8」这种把置信度当避坑点的话。"""
+    from ui_render import day_panel
+
+    for day in outcome.plan.days:
+        html = day_panel(day, outcome.plan.request.audience or "亲子带娃")
+        assert "bandname" in html, "时段分组标题丢了"
+        assert not re.search(r"避坑[：:]\s*0?\.\d", html), f"避坑点解析错位：{html[:200]}"
+
+
+def test_every_slot_has_audience_reason(outcome):
+    """每条安排都要有理由，且理由不能是空话。"""
+    forbidden = ("值得一去", "很有特色", "不容错过", "不错")
+    plan = outcome.plan
+    for day in plan.days:
+        for s in day.slots:
+            if not s.poi:
+                continue
+            from ui_render import slot_reason
+
+            reason = slot_reason(s, plan.request.audience or "亲子带娃")
+            assert len(reason) >= 12, f"{s.title} 的理由太短：{reason!r}"
+            assert not any(word in reason for word in forbidden), f"空话：{reason}"
+
+
+def test_cost_unknown_is_not_reported_as_zero(outcome):
+    """价格缺失要标"待确认"，不能显示 ¥0 让用户以为免费。"""
+    plan = outcome.plan
+    for day in plan.days:
+        for s in day.slots:
+            if s.type.label == "入住退房":
+                continue  # 住宿按「间 × 晚」计在 budget_breakdown，不落在逐日 slot 上
+            if s.poi and not s.cost_cents and (s.poi.ticket_cents or s.poi.avg_cost_cents):
+                pytest.fail(f"{s.title} 有价格却没计入花费")
+    lodging = [s for d in plan.days for s in d.slots if s.type.label == "入住退房"]
+    if lodging:
+        assert any(k.startswith("住宿") for k in plan.budget_breakdown),             "住宿有候选却没进预算分项，等于悄悄漏掉最大的一笔开销"

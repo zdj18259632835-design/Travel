@@ -1,0 +1,21 @@
+# Streamlit 外观配置：山水（青绿山水 + 宣纸）风格
+# 生效方式：重启 streamlit（改这个文件不会热重载）
+
+[theme]
+base = "light"
+primaryColor = "#3d6b5a"          # 石绿：主按钮、选中态
+backgroundColor = "#f6f4ec"       # 宣纸底色
+secondaryBackgroundColor = "#eaf0ea"  # 淡青：卡片底
+textColor = "#26332f"             # 松墨色
+font = "sans serif"
+
+[server]
+headless = true
+
+[browser]
+gatherUsageStats = false
+
+[client]
+# 侧边栏整块收起：Key 状态与离线开关移到「数据源自检」页，主界面只留内容
+showSidebarNavigation = false
+toolbarMode = "minimal"

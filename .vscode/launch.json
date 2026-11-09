@@ -1,0 +1,101 @@
+{
+    // 按 F5 选择配置即可带调试启动；Qoder / VS Code 通用
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "网页版 Streamlit",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "streamlit",
+            "args": ["run", "app.py", "--server.headless", "true"],
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONIOENCODING": "utf-8",
+                "PYTHONUNBUFFERED": "1"
+            }
+        },
+        {
+            "name": "CLI：生成行程（会先问你一句话）",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "tripagent.cli",
+            "args": ["plan", "${input:planText}", "--out", "md,html,ics"],
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONIOENCODING": "utf-8"
+            }
+        },
+        {
+            "name": "CLI：即时问答",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "tripagent.cli",
+            "args": ["ask", "${input:askText}", "--top", "5"],
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "console": "integratedTerminal",
+            "env": {
+                "PYTHONIOENCODING": "utf-8"
+            }
+        },
+        {
+            "name": "CLI：数据源自检 doctor",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "tripagent.cli",
+            "args": ["doctor"],
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "console": "integratedTerminal",
+            "env": {
+                "PYTHONIOENCODING": "utf-8"
+            }
+        },
+        {
+            "name": "全部测试 pytest",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "pytest",
+            "args": ["-q"],
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "console": "integratedTerminal",
+            "env": {
+                "PYTHONIOENCODING": "utf-8"
+            }
+        },
+        {
+            "name": "当前文件（调试单个脚本）",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "cwd": "${workspaceFolder}",
+            "python": "${workspaceFolder}\\.venv\\Scripts\\python.exe",
+            "console": "integratedTerminal",
+            "env": {
+                "PYTHONIOENCODING": "utf-8",
+                "PYTHONPATH": "${workspaceFolder}\\src"
+            }
+        }
+    ],
+    "inputs": [
+        {
+            "id": "planText",
+            "type": "promptString",
+            "description": "用一句话描述你的旅行诉求",
+            "default": "成都 3天 11月10日出发 人均预算800 爱吃火锅 想体验夜生活"
+        },
+        {
+            "id": "askText",
+            "type": "promptString",
+            "description": "即时问一句（城市 + 想要什么）",
+            "default": "成都有哪些评分高、性价比好的清吧？"
+        }
+    ]
+}

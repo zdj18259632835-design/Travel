@@ -1,0 +1,14 @@
+# ==== 运行时依赖（全部安装于项目内 .venv，不影响系统 Python）====
+httpx>=0.27            # 所有外部 API 调用（支持 async + timeout）
+python-dotenv>=1.0     # .env 读取 API Key
+pydantic>=2.7          # 数据模型（行程/证据/校验报告）
+pydantic-settings>=2.3 # 配置分层：默认值 < .env < 环境变量
+openai>=1.40           # 走 DashScope 的 OpenAI 兼容通道调用通义千问
+streamlit>=1.40        # 网页 UI（app.py）
+fastapi>=0.110         # HTTP API 层（tripagent serve），Qoder Sites 前端调用它
+uvicorn[standard]>=0.30  # 跑 FastAPI 的 ASGI 服务器
+rich>=13.7             # CLI 终端表格/卡片渲染
+jinja2>=3.1            # HTML / Markdown 行程报告模板导出
+
+# ==== 开发/测试依赖 ====
+pytest>=8.2            # 单元测试 + 行程约束校验回归
