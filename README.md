@@ -1,11 +1,12 @@
 ---
 # 魔搭创空间（ModelScope Studio）元数据：删掉这段就变回普通 README
+# 运行方式选的是 Streamlit（平台直接跑根目录 app.py + requirements.txt）。
+# 想切回 Docker 就把 sdk 改成 docker 并加回 app_port: 7860，仓库里的 Dockerfile 随时可用。
 title: TripAgent 山水行旅 · 会看天气的旅行管家
 emoji: 🧭
 colorFrom: green
 colorTo: gray
-sdk: docker
-app_port: 7860
+sdk: streamlit
 pinned: false
 license: apache-2.0
 domain: lifestyle

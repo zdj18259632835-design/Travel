@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import functools
+import tempfile
 from pathlib import Path
 
 from pydantic import Field
@@ -106,6 +107,19 @@ class Settings(BaseSettings):
         return names
 
     def ensure_dirs(self) -> None:
+        """可写目录准备。创空间/容器常把代码目录挂成只读，这时把可写目录整体挪到
+        临时目录，而不是让第一次写缓存时抛出一个看不懂的 PermissionError。
+        """
+        probe = self.data_dir / ".write_probe"
+        try:
+            self.data_dir.mkdir(parents=True, exist_ok=True)
+            probe.write_text("1", encoding="utf-8")
+            probe.unlink()
+        except OSError:
+            base = Path(tempfile.gettempdir()) / "tripagent"
+            self.data_dir = base / "data"
+            self.cache_dir = base / "cache"
+            self.output_dir = base / "output"
         for d in (self.data_dir, self.cache_dir, self.fixture_dir, self.output_dir):
             d.mkdir(parents=True, exist_ok=True)
 

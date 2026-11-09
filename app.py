@@ -8,10 +8,18 @@
 from __future__ import annotations
 
 import os
+import sys
 from datetime import date, timedelta
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
+
+# 平台型运行环境（魔搭创空间的 Streamlit 框架）只会 pip install requirements.txt，
+# 不会执行 `pip install -e .`。不把 src 加进 sys.path，第一行 import 就是 ModuleNotFoundError。
+_SRC = Path(__file__).resolve().parent / "src"
+if _SRC.is_dir() and str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))
 
 import ui_render
 import ui_theme

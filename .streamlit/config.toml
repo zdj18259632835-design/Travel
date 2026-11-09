@@ -11,6 +11,11 @@ font = "sans serif"
 
 [server]
 headless = true
+# 创空间把应用嵌在 modelscope.cn 的 iframe 里，源与页面不同。
+# 开着 CORS/XSRF 检查时 Streamlit 会拒掉 WebSocket 握手，表现为"页面空白、一直转圈"。
+# 写在 config.toml 而不是启动参数里，是因为平台的 Streamlit 运行方式由我们控制不了命令行。
+enableCORS = false
+enableXsrfProtection = false
 
 [browser]
 gatherUsageStats = false
