@@ -185,7 +185,8 @@ class QWeather(Provider):
     def fetch_alarms(self, city: CityInfo) -> list[AlarmRecord]:
         loc = self._location_id(city)
         data = self.get_json(
-            f"{self._host()}/v7/warning/now", {"location": loc, "key": self.settings.qweather_key}
+            f"{self._host()}/v7/warning/now", {"location": loc, "key": self.settings.qweather_key},
+            timeout=self.settings.alarm_timeout,
         )
         out = []
         for w in (data or {}).get("warning") or []:
@@ -226,7 +227,8 @@ class CMAAlarm(Provider):
 
     def fetch_alarms(self, city: CityInfo) -> list[AlarmRecord]:
         def fetch() -> list[AlarmRecord]:
-            data = self.get_json(self.URL, headers={"Accept": "application/json"})
+            data = self.get_json(self.URL, headers={"Accept": "application/json"},
+                                 timeout=self.settings.alarm_timeout)
             rows = (data or {}).get("data") if isinstance(data, dict) else None
             return select_alarms(rows or [], city, "cma_alarm")
 
@@ -254,7 +256,7 @@ class NMCAlarm(Provider):
         }
 
         def fetch() -> list[AlarmRecord]:
-            data = self.get_json(self.URL, params)
+            data = self.get_json(self.URL, params, timeout=self.settings.alarm_timeout)
             page = ((data or {}).get("data") or {}).get("page") or {}
             rows = [r for r in (page.get("list") or []) if isinstance(r, dict)]
             for r in rows:

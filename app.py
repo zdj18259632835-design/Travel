@@ -39,6 +39,7 @@ ui_theme.inject()
 CITY_INDEX = sorted(all_cities(), key=lambda c: (c.level != "city", c.name))
 CITY_NAMES = [c.name for c in CITY_INDEX[:400]]
 INTEREST_OPTIONS = {i.label: i for i in Interest}
+PLAN_COOLDOWN_S = 20  # 同一个浏览器会话两次规划的最小间隔（秒）
 
 
 def _service(offline: bool) -> TripService:
@@ -302,11 +303,18 @@ def _export_block(plan, svc: TripService, stem: str) -> None:
 
 
 def tab_plan(svc: TripService) -> None:
+    import time as _time
+
     p = _inputs()
     text = _build_text(p)
-    if st.button("开始规划", type="primary", use_container_width=True):
+    waited = _time.time() - float(st.session_state.get("lastPlanAt", 0))
+    cooling = max(0, PLAN_COOLDOWN_S - int(waited))
+    if cooling:
+        st.caption(f"两次规划之间请等 {cooling} 秒：模型额度是全站点共享的，这条限制防止单个人反复刷。")
+    if st.button("开始规划", type="primary", use_container_width=True, disabled=cooling > 0):
         with st.spinner("正在查天气、抓预警、检索地点、装配行程、逐条校验……"):
             outcome = svc.plan_trip(text)
+        st.session_state["lastPlanAt"] = _time.time()
         st.session_state["outcome"] = outcome
         st.session_state["svc"] = svc
         if outcome.plan:
@@ -407,6 +415,15 @@ def tab_about(svc: TripService) -> None:
     c2.caption(f"高德地图：{'已配置' if s.amap_key else '未配置'}")
     c3.caption(f"和风天气：{'已配置' if (s.qweather_key and s.qweather_host) else ('缺 Host' if s.qweather_key else '未配置')}")
     c4.caption(f"模型：{s.llm_model}")
+    from tripagent.providers.usage import UsageLedger
+
+    led = UsageLedger(s.usage_path)
+    cap = s.llm_daily_token_budget
+    used = led.tokens_today()
+    st.caption(
+        f"今日模型用量：{used:,} tokens（{led.calls_today()} 次调用）"
+        + (f" · 上限 {cap:,}，剩余 {max(0, cap - used):,}" if cap > 0 else " · 未设上限")
+    )
     st.caption(
         "想看某次规划的数据来源与降级轨迹（谁试过、谁失败）：\n\n"
         "`.venv\\Scripts\\python.exe -m tripagent.cli \"成都 3天\" --trace`\n\n"

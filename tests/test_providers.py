@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
+
 from tripagent.config import get_settings
 from tripagent.models.enums import Category, Interest, Severity
 from tripagent.models.poi import POIQuery, POIRecord, RouteLeg
@@ -272,3 +274,43 @@ def test_reason_lines_accept_full_width_separator():
     raw = "1. 天后宫|上午排队耗体力，建议阴天前往\n2. 洛阳桥｜傍晚退潮海风大，长辈备好外套"
     table = parse_reason_lines(raw)
     assert set(table) == {"天后宫", "洛阳桥"}, table
+
+
+# ---------------------------------------------------------------- 模型额度护栏
+def test_usage_ledger_counts_persists_and_blocks(tmp_path):
+    from types import SimpleNamespace
+
+    from tripagent.providers.usage import UsageLedger, usage_of
+
+    p = tmp_path / "u.json"
+    led = UsageLedger(p)
+    assert led.tokens_today() == 0 and led.calls_today() == 0
+    led.record(prompt=1000, completion=400, reasoning=0)
+    assert led.tokens_today() == 1400 and led.calls_today() == 1
+    assert not led.over_budget(2000)
+    assert led.over_budget(1000)
+    assert not led.over_budget(0), "0 必须表示不设限，否则本地开发会被莫名卡住"
+    # 重新打开文件必须还在：创空间可能多实例，台账是唯一的公共账本
+    assert UsageLedger(p).tokens_today() == 1400
+
+    r = SimpleNamespace(usage=SimpleNamespace(
+        prompt_tokens=1200, completion_tokens=360,
+        completion_tokens_details=SimpleNamespace(reasoning_tokens=11000)))
+    assert usage_of(r) == (1200, 360, 11000), "思考 token 不单独拆出来，账就少算一大截"
+    assert usage_of({"usage": {"prompt_tokens": 5, "completion_tokens": 7}}) == (5, 7, 0)
+    assert usage_of(None) == (0, 0, 0)
+
+
+def test_llm_refuses_when_daily_token_budget_exhausted(tmp_path):
+    from tripagent.config import Settings
+    from tripagent.providers.base import Cache, ProviderError
+    from tripagent.providers.llm import DashScope
+    from tripagent.providers.usage import UsageLedger
+
+    s = Settings(dashscope_api_key="sk-test", llm_daily_token_budget=1000,
+                 data_dir=tmp_path, cache_dir=tmp_path / "c",
+                 output_dir=tmp_path / "o", fixture_dir=tmp_path / "f")
+    s.ensure_dirs()
+    UsageLedger(s.usage_path).record(prompt=2000)
+    with pytest.raises(ProviderError, match="额度"):
+        DashScope(s, Cache(s)).chat([{"role": "user", "content": "hi"}])

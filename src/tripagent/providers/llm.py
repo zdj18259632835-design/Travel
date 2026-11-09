@@ -12,6 +12,7 @@ import re
 from typing import Any
 
 from .base import Provider, ProviderError, provider
+from .usage import UsageLedger, usage_of
 
 DASHSCOPE_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 
@@ -64,10 +65,22 @@ class DashScope(Provider):
             extra["search_options"] = {"search_strategy": search_strategy}
         if extra:
             kwargs["extra_body"] = extra
+
+        ledger = UsageLedger(self.settings.usage_path)
+        limit = self.settings.llm_daily_token_budget
+        if limit > 0 and ledger.over_budget(limit):
+            # 明确报错而不是静默降级：调用方会走本地知识库/模板文案，
+            # 界面能告诉用户"今天模型额度用完了"，而不是让他等 40 秒拿到一份变笨的方案
+            raise ProviderError(
+                f"今日模型 token 额度已用完（{ledger.tokens_today()}/{limit}），已改用本地知识库与模板文案"
+            )
+
         try:
             resp = self._client().chat.completions.create(**kwargs)
         except Exception as exc:
             raise ProviderError(f"DashScope 调用失败：{type(exc).__name__}: {str(exc)[:180]}") from exc
+        prompt, completion, reasoning = usage_of(resp)
+        ledger.record(prompt=prompt, completion=completion, reasoning=reasoning)
         text = (resp.choices[0].message.content or "").strip() if resp.choices else ""
         if not text:
             raise ProviderError("DashScope 返回空内容")

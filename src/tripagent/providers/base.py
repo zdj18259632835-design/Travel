@@ -113,14 +113,15 @@ class Provider:
         return self.available(), ""
 
     # ---- 子类常用工具 ----
-    def get_json(self, url: str, params: dict | None = None, headers: dict | None = None) -> Any:
+    def get_json(self, url: str, params: dict | None = None, headers: dict | None = None,
+                 timeout: float | None = None) -> Any:
         h = {"User-Agent": self.settings.http_user_agent, **(headers or {})}
         try:
             r = httpx.get(
                 url,
                 params=params,
                 headers=h,
-                timeout=self.settings.http_timeout,
+                timeout=timeout or self.settings.http_timeout,
                 follow_redirects=True,
             )
         except httpx.HTTPError as exc:

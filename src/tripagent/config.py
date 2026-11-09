@@ -57,9 +57,15 @@ class Settings(BaseSettings):
     offline: bool = Field(default=False, alias="TRIPAGENT_OFFLINE")
     cache_ttl_hours: float = Field(default=6.0, alias="TRIPAGENT_CACHE_TTL_HOURS")
     http_timeout: float = Field(default=12.0, alias="TRIPAGENT_HTTP_TIMEOUT")
+    # 预警接口偶发很慢（实测出现过 48 秒），而它在并发取数那段是"最长的一条路"，
+    # 会直接决定整段耗时。给一个更短的专用超时，让它尽快让位给下一个预警源。
+    alarm_timeout: float = Field(default=8.0, alias="TRIPAGENT_ALARM_TIMEOUT")
     # 开启 enable_search 的联网归纳实测要 30-120 秒，绝不能复用普通接口的 12 秒超时，
     # 否则表现为"模型无结果"而不是"我等太短了"，非常难查。
     llm_timeout: float = Field(default=150.0, alias="TRIPAGENT_LLM_TIMEOUT")
+    # 公开部署的止损闸：每天最多烧多少 token，0 表示不设限。
+    # 默认 200 万 ≈ 两百次完整规划，够演示，但刷不掉你的账号。
+    llm_daily_token_budget: int = Field(default=2_000_000, alias="TRIPAGENT_LLM_DAILY_TOKEN_BUDGET")
     http_user_agent: str = "Mozilla/5.0 (compatible; TripAgent/0.1; +https://local.demo)"
 
     # ---- 数据源降级链（越靠前优先级越高，失败/为空则落到下一个）----
@@ -98,6 +104,11 @@ class Settings(BaseSettings):
     @property
     def online(self) -> bool:
         return not self.offline
+
+    @property
+    def usage_path(self) -> Path:
+        """模型用量台账（按天累计 token）。公开部署时的止损依据。"""
+        return self.data_dir / "llm_usage.json"
 
     def chain(self, kind: str) -> list[str]:
         raw = getattr(self, f"{kind}_chain", "") or ""
