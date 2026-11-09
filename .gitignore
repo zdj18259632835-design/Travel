@@ -32,3 +32,7 @@ output/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Qoder 工具生成的发布描述符与本地缓存：不属于源码
+*.qoder.site
+.pytest_cache/
