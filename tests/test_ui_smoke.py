@@ -136,3 +136,59 @@ def test_cost_unknown_is_not_reported_as_zero(outcome):
     lodging = [s for d in plan.days for s in d.slots if s.type.label == "入住退房"]
     if lodging:
         assert any(k.startswith("住宿") for k in plan.budget_breakdown),             "住宿有候选却没进预算分项，等于悄悄漏掉最大的一笔开销"
+
+
+def _labels(items):
+    return [str(getattr(x, "label", "")) for x in items]
+
+
+def test_login_gate_renders_and_unlocks_in_real_app(monkeypatch):
+    """闸门只在真跑 app.py 时才算验证过：单测挡不住"控件接线错"这类问题。"""
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.setenv("TRIPAGENT_ACCESS_CODES", "tianchi2026")
+    monkeypatch.setenv("TRIPAGENT_OWNER_CODE", "owner-x")
+
+    at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=120)
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    assert "体验口令" in _labels(at.text_input), _labels(at.text_input)
+    assert "开始规划" not in "".join(_labels(at.button)), "陌生访客不该看到功能按钮"
+
+    # 错口令：仍然挡住
+    at.text_input[0].set_value("猜一下")
+    at.button[0].click().run()
+    assert "开始规划" not in "".join(_labels(at.button)), _labels(at.button)
+
+    # 主办方口令：放行到完整界面
+    at2 = AppTest.from_file(str(ROOT / "app.py"), default_timeout=120)
+    at2.run()
+    at2.text_input[0].set_value("tianchi2026")
+    at2.button[0].click().run()
+    assert "开始规划" in "".join(_labels(at2.button)), _labels(at2.button)
+
+
+def test_owner_keeps_working_after_budget_exhausted(monkeypatch, outcome):
+    """到量即停必须真的停在界面上：访客按钮变灰，站长按钮可用。"""
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.setenv("TRIPAGENT_ACCESS_CODES", "tianchi2026")
+    monkeypatch.setenv("TRIPAGENT_OWNER_CODE", "owner-x")
+    monkeypatch.setenv("TRIPAGENT_LLM_DAILY_TOKEN_BUDGET", "1")
+    from tripagent.config import reload_settings
+    from tripagent.providers.usage import UsageLedger
+
+    s = reload_settings()
+    UsageLedger(s.usage_path).record(prompt=10)
+    try:
+        for code, expect_disabled in (("tianchi2026", True), ("owner-x", False)):
+            at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=120)
+            at.run()
+            at.text_input[0].set_value(code)
+            at.button[0].click().run()
+            plan_btn = [b for b in at.button if "开始规划" in str(getattr(b, "label", ""))]
+            assert plan_btn, f"{code} 应已进入主界面"
+            assert bool(plan_btn[0].disabled) is expect_disabled, (code, plan_btn[0].disabled)
+    finally:
+        monkeypatch.delenv("TRIPAGENT_LLM_DAILY_TOKEN_BUDGET")
+        UsageLedger(reload_settings().usage_path).reset()

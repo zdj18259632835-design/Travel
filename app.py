@@ -302,7 +302,31 @@ def _export_block(plan, svc: TripService, stem: str) -> None:
             )
 
 
-def tab_plan(svc: TripService) -> None:
+def _gate(svc: TripService):
+    """口令闸门 + 到量即停。两个配置都为空时完全不启用，本地开发零打扰。"""
+    from tripagent.core.access import decide
+    from tripagent.providers.usage import UsageLedger
+
+    s = svc.settings
+    if not s.access_codes and not s.owner_code:
+        return decide("", "", 0, 0)
+    led = UsageLedger(s.usage_path)
+    return decide(s.access_codes, s.owner_code, s.llm_daily_token_budget,
+                  led.tokens_today(), st.session_state.get("accessInput", ""))
+
+
+def _render_login(gate) -> None:
+    st.markdown("### 体验入口")
+    if gate.reason:
+        st.info(gate.reason)
+    code = st.text_input("体验口令", type="password", placeholder="由主办方发放")
+    if st.button("进入", type="primary"):
+        st.session_state["accessInput"] = code.strip()
+        st.rerun()
+    st.caption("本作品为天池 2026 Qoder 高校创造力大赛演示，联网规划会消耗模型额度，因此需要口令。")
+
+
+def tab_plan(svc: TripService, can_run: bool = True) -> None:
     import time as _time
 
     p = _inputs()
@@ -311,7 +335,10 @@ def tab_plan(svc: TripService) -> None:
     cooling = max(0, PLAN_COOLDOWN_S - int(waited))
     if cooling:
         st.caption(f"两次规划之间请等 {cooling} 秒：模型额度是全站点共享的，这条限制防止单个人反复刷。")
-    if st.button("开始规划", type="primary", use_container_width=True, disabled=cooling > 0):
+    if not can_run:
+        st.warning("今日模型额度已用完，联网规划已暂停；「关于」页可看到今日用量，天气速查不受影响。")
+    if st.button("开始规划", type="primary", use_container_width=True,
+                 disabled=cooling > 0 or not can_run):
         with st.spinner("正在查天气、抓预警、检索地点、装配行程、逐条校验……"):
             outcome = svc.plan_trip(text)
         st.session_state["lastPlanAt"] = _time.time()
@@ -327,11 +354,11 @@ def tab_plan(svc: TripService) -> None:
         _render_plan(outcome)
 
 
-def tab_ask(svc: TripService) -> None:
+def tab_ask(svc: TripService, can_run: bool = True) -> None:
     st.markdown("### 即时问一句：酒吧 / KTV / 游乐园 / 演出 / 夜市…")
     text = st.text_input("问题", placeholder="成都有哪些评分高、性价比好的清吧？最好离春熙路近")
     top = st.slider("推荐几个", 3, 10, 5)
-    if st.button("问一问", type="primary") and text.strip():
+    if st.button("问一问", type="primary", disabled=not can_run) and text.strip():
         st.session_state["answer"] = svc.ask(text.strip(), limit=top)
     ans = st.session_state.get("answer")
     if not ans:
@@ -434,11 +461,17 @@ def tab_about(svc: TripService) -> None:
 def main() -> None:
     ui_theme.hero()
     svc = _service(_offline_flag())
+    gate = _gate(svc)
+    if not gate.allowed:
+        _render_login(gate)
+        return
+    if gate.enabled and gate.who == "owner":
+        st.caption("站长身份：即使今日额度用完也可继续使用。")
     t1, t2, t3, t4 = st.tabs(["🗺️ 行程规划", "🎈 即时问答", "🗂 历史", "ℹ️ 关于"])
     with t1:
-        tab_plan(svc)
+        tab_plan(svc, gate.costly_allowed)
     with t2:
-        tab_ask(svc)
+        tab_ask(svc, gate.costly_allowed)
     with t3:
         tab_history(svc)
     with t4:

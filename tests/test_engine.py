@@ -285,3 +285,47 @@ def test_days_that_really_differ_get_ranked_and_sunset_anchor():
     assert any("日落 17:" in v["advice"] for v in outdoor), [v["advice"] for v in outdoor]
     assert groups["indoor"] or groups["avoid"], "雷暴大雨日不该还留在「适合户外」里"
     assert all(v["date"] != "11/24" for v in outdoor), [v["date"] for v in outdoor]
+
+
+# ---------------------------------------------------------------- 访问闸门
+def test_gate_is_inert_without_configured_codes():
+    """本地开发/断网演示绝不能被口令挡住。"""
+    from tripagent.core.access import GUEST, decide
+
+    g = decide("", "", 2_000_000, 999_999_999)
+    assert g.enabled is False and g.allowed and g.costly_allowed
+    assert g.who is GUEST
+
+
+def test_gate_blocks_strangers_and_admits_ticket_holders():
+    from tripagent.core.access import decide
+
+    assert decide("tianchi2026", "me", 0, 0, "").allowed is False
+    assert decide("tianchi2026", "me", 0, 0, "猜一下").allowed is False
+    v = decide("tianchi2026", "me", 0, 0, "tianchi2026")
+    assert v.allowed and v.who == "visitor" and v.costly_allowed
+    o = decide("tianchi2026", "me", 0, 0, "me")
+    assert o.allowed and o.who == "owner"
+
+
+def test_budget_exhaustion_stops_visitors_but_not_the_owner():
+    """到量即停：停的是会花钱的功能，不花钱的天气速查继续开着。"""
+    from tripagent.core.access import decide
+
+    over = decide("tianchi2026", "me", 2_000_000, 2_000_000, "tianchi2026")
+    assert over.allowed and not over.costly_allowed, over
+    assert "额度已用完" in over.reason and "天气速查" in over.reason
+
+    owner = decide("tianchi2026", "me", 2_000_000, 2_000_000, "me")
+    assert owner.costly_allowed, owner
+
+    no_cap = decide("tianchi2026", "me", 0, 999_999_999, "tianchi2026")
+    assert no_cap.costly_allowed, "上限设 0 必须表示不设限"
+
+
+def test_gate_reason_shown_when_login_required_is_pure_text():
+    """闸门拒绝时给的是"要口令"，不是报错堆栈——评委第一眼看到的是说明。"""
+    from tripagent.core.access import decide
+
+    g = decide("tianchi2026", "", 0, 0, "")
+    assert not g.allowed and "口令" in g.reason

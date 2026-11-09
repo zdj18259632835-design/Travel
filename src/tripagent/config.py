@@ -66,6 +66,10 @@ class Settings(BaseSettings):
     # 公开部署的止损闸：每天最多烧多少 token，0 表示不设限。
     # 默认 200 万 ≈ 两百次完整规划，够演示，但刷不掉你的账号。
     llm_daily_token_budget: int = Field(default=2_000_000, alias="TRIPAGENT_LLM_DAILY_TOKEN_BUDGET")
+    # 体验口令（逗号分隔）：公开部署时只让主办方进入。留空 = 不启用闸门，本地开发不受影响。
+    access_codes: str = Field(default="", alias="TRIPAGENT_ACCESS_CODES")
+    # 站长口令：无视日额度上限，到量后仍可继续演示。绝不写进仓库，只放密文变量。
+    owner_code: str = Field(default="", alias="TRIPAGENT_OWNER_CODE")
     http_user_agent: str = "Mozilla/5.0 (compatible; TripAgent/0.1; +https://local.demo)"
 
     # ---- 数据源降级链（越靠前优先级越高，失败/为空则落到下一个）----
