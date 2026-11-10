@@ -99,14 +99,38 @@ def test_rendered_app_shows_no_clock_ranges(outcome):
     assert not hits, f"界面仍在按钟点列出行程：{hits}"
 
 
-def test_day_panel_free_of_broken_culture_fields(outcome):
-    """文旅字段错位时界面会输出「避坑：0.8」这种把置信度当避坑点的话。"""
-    from ui_render import day_panel
+def test_gallery_widgets_render_and_no_numeric_pitfalls_leak(outcome):
+    """两件事一起守：
 
+    1. 文旅字段错位时界面会输出「避坑：0.8」这种把置信度当避坑点的话；
+    2. 图片改成原生翻页后，每个卡片都要有唯一 widget key —— key 撞了 Streamlit
+       会直接报错，而这种错在纯 HTML 时代不存在，所以必须专门跑一次真实界面。
+    """
     for day in outcome.plan.days:
-        html = day_panel(day, outcome.plan.request.audience or "亲子带娃")
-        assert "bandname" in html, "时段分组标题丢了"
-        assert not re.search(r"避坑[：:]\s*0?\.\d", html), f"避坑点解析错位：{html[:200]}"
+        for s in day.slots:
+            for p in (s.poi.pitfalls if s.poi else []):
+                assert not re.fullmatch(r"0?\.\d+", str(p)), (s.title, p)
+
+    # 造几张图，强制走图片分支（离线 fixture 默认没有图）
+    for i, s in enumerate(outcome.plan.all_slots):
+        if s.poi:
+            s.poi.photos = [f"https://example.invalid/{i}.jpg", f"https://example.invalid/{i}b.jpg"]
+
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=120)
+    at.session_state["outcome"] = outcome
+    at.session_state["svc"] = None
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+
+    labels = _labels(at.button)
+    assert "◀" in labels and "▶" in labels and "🔍 放大看" in labels, labels
+    gal_keys = [str(getattr(b, "key", "")) for b in at.button
+                if str(getattr(b, "key", "")).startswith(("prev:", "next:", "zoom:"))]
+    assert len(gal_keys) >= 3 and len(gal_keys) == len(set(gal_keys)), gal_keys
+    texts = " ".join(str(getattr(m, "value", "")) for m in at.markdown)
+    assert not re.search(r"避坑[：:]\s*0?\.\d", texts), texts[:200]
 
 
 def test_every_slot_has_audience_reason(outcome):

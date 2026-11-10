@@ -271,28 +271,31 @@ class TripService:
         主检索（高德）已经带图，缺图的主要是大模型归纳出来的文旅项目——
         它们没有坐标，所以按名字回查一次高德 POI 拿同一批公开图。
         """
-        targets = [
-            s.poi for s in plan.all_slots
-            if s.poi and not s.poi.photos and s.type.label not in ("入住退房", "交通移动")
-        ]
-        if not targets:
-            return 0
-        import time as _time
+        from ..providers.images import filter_poi_photos
 
-        t = _time.time()
-        res = self.chain.run("images", "fetch_batch", city, [p.name for p in targets][:14], 4)
-        self.last_photo_ms = int((_time.time() - t) * 1000)
-        table = res.value or {}
+        wanted = [s.poi for s in plan.all_slots if s.poi and s.type.label not in ("入住退房", "交通移动")]
+        targets = [p for p in wanted if not p.photos]
         filled = 0
-        for poi in targets:
-            urls = table.get(poi.name) or []
-            if urls:
-                poi.photos = urls
-                filled += 1
-        outcome.trace.append(
-            f"实拍图：{filled}/{len(targets)} 个活动补到图，耗时 {self.last_photo_ms / 1000:.1f}s"
-            f"（来源 {res.source if filled else 'none'}）"
-        )
+        if targets:
+            import time as _time
+
+            t = _time.time()
+            res = self.chain.run("images", "fetch_batch", city, [p.name for p in targets][:14], 4)
+            self.last_photo_ms = int((_time.time() - t) * 1000)
+            table = res.value or {}
+            for poi in targets:
+                urls = table.get(poi.name) or []
+                if urls:
+                    poi.photos = urls
+                    filled += 1
+            outcome.trace.append(
+                f"实拍图：{filled}/{len(targets)} 个活动补到图，耗时 {self.last_photo_ms / 1000:.1f}s"
+                f"（来源 {res.source if filled else 'none'}）"
+            )
+        # 高德检索直接带回来的图同样要过清晰度闸门：糊图比没图更伤观感
+        dropped, touched = filter_poi_photos(self.chain, self.settings, wanted)
+        if touched:
+            outcome.trace.append(f"图片质检：{touched} 个地点共淘汰 {dropped} 张糊图/小图")
         return filled
 
     # ------------------------------------------------------------------

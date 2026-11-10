@@ -112,37 +112,6 @@ hr { border-color: rgba(61,107,90,.18); }
 .slot .tag.n { background: rgba(123,94,167,.14); color: #6b4f96; }
 .slot .tag.res { background: rgba(180,85,47,.14); color: #9a4526; }
 
-/* ---------- 活动实拍图轮播（纯 CSS，无 JS、无外部依赖） ---------- */
-.gal {
-    position: relative; width: 100%; aspect-ratio: 16 / 9; max-height: 260px;
-    margin: 8px 0 6px; border-radius: 12px; overflow: hidden;
-    background: #e9e6db; box-shadow: 0 1px 0 rgba(61,107,90,.12);
-}
-.gal img {
-    position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover;
-    opacity: 0; animation-timing-function: ease-in-out; animation-iteration-count: infinite;
-}
-/* 每张图停留 3s：n 张就是 3n 秒一轮，交叉淡入淡出 */
-.gal.n1 img { animation: none; opacity: 1; }
-.gal.n2 img { animation-name: gal2; animation-duration: 8s; }
-.gal.n3 img { animation-name: gal3; animation-duration: 9s; }
-.gal.n4 img { animation-name: gal4; animation-duration: 12s; }
-.gal img:nth-child(2) { animation-delay: 3s; }
-.gal img:nth-child(3) { animation-delay: 6s; }
-.gal img:nth-child(4) { animation-delay: 9s; }
-.gal .cap {
-    position: absolute; left: 0; right: 0; bottom: 0; padding: 14px 10px 7px;
-    font-size: .74rem; color: #f6f4ec; letter-spacing: .06em;
-    background: linear-gradient(transparent, rgba(20,32,28,.62));
-}
-@keyframes gal2 { 0%{opacity:0} 2%{opacity:1} 46%{opacity:1} 50%{opacity:0} 100%{opacity:0} }
-@keyframes gal3 { 0%{opacity:0} 2%{opacity:1} 31%{opacity:1} 34%{opacity:0} 100%{opacity:0} }
-@keyframes gal4 { 0%{opacity:0} 2%{opacity:1} 23%{opacity:1} 25%{opacity:0} 100%{opacity:0} }
-@media (prefers-reduced-motion: reduce) {
-    .gal img { animation: none; opacity: 0; }
-    .gal img:first-child { opacity: 1; }
-}
-
 /* ---------- 侧边栏彻底隐藏（Key 状态与离线开关已移入自检页）---------- */
 #MainMenu, footer { visibility: hidden; }
 [data-testid="stSidebar"] { display: none; }

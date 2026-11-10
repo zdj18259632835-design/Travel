@@ -146,6 +146,10 @@ class EntertainmentAdvisor:
 
         ranked.sort(key=lambda r: -r.score)
         answer.items = ranked[: max(1, limit)]
+        # 只给真正会显示出来的几条做图片质检：打分要下载图片，别为看不见的候选花钱花时间
+        from ..providers.images import filter_poi_photos
+
+        filter_poi_photos(self.chain, self.settings, [r.poi for r in answer.items])
         answer.summary = self._summarize(city, cat, answer.items) or _template_summary(city, cat, answer.items, prefs)
         _append_compliance_notes(answer)
         return answer

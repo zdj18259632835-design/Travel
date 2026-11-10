@@ -186,7 +186,7 @@ def _render_plan(outcome: PlanOutcome) -> None:
                 st.caption(sig + (f"　·　⚕️ {'；'.join(tips)}" if tips else ""))
             if day.risk and day.risk.advice:
                 st.caption(f"风险等级：**{day.risk.severity.label}** · " + "；".join(day.risk.advice))
-            st.markdown(ui_render.day_panel(day, plan.request.audience or "通用"), unsafe_allow_html=True)
+            ui_render.day_view(day, plan.request.audience or "通用")
             if unknown:
                 st.caption("价格待确认的项目：" + "、".join(s.title for s in unknown)[:120])
     with tabs[-2]:
@@ -373,7 +373,7 @@ def tab_ask(svc: TripService, can_run: bool = True) -> None:
     for r in ans.items:
         with st.container(border=True):
             if r.poi.photos:
-                st.markdown(ui_render.gallery(r.poi.photos, r.poi.name), unsafe_allow_html=True)
+                ui_render.photo_gallery(r.poi, f"ask:{r.poi.name[:12]}")
             head = f"**{r.poi.name}** · {r.poi.category.label}"
             if r.poi.rating:
                 head += f" · 评分 {r.poi.rating}"

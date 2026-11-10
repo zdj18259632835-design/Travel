@@ -226,14 +226,58 @@ def test_amap_photos_upgrades_http_and_dedupes():
     assert amap_photos({}) == []
 
 
-def test_gallery_html_is_escaped_and_scales_frame_count():
-    import ui_render
+def test_sharpness_separates_clear_from_blurred():
+    """拉普拉斯方差必须能把锐利图与糊图拉开数量级，否则筛图等于掷骰子。"""
+    import io
 
-    html = ui_render.gallery(["https://x/a.jpg", 'https://x/b"1.jpg'], '某"景区')
-    assert 'class="gal n2"' in html
-    assert "&quot;" in html
-    assert "某&#34;景区" in html or "&quot;" in html
-    assert ui_render.gallery([], "无图") == ""
+    import numpy as np
+    from PIL import Image, ImageFilter
+
+    from tripagent.providers.images import sharpness
+
+    a = np.zeros((400, 600), dtype=np.uint8)
+    a[::17, :] = 255                     # 密集硬边：对焦好的图梯度强
+    b = np.asarray(Image.fromarray(a).filter(ImageFilter.GaussianBlur(6)), dtype=np.uint8)
+    buf = {}
+    for name, arr in (("sharp", a), ("blur", b)):
+        f = io.BytesIO()
+        Image.fromarray(arr).save(f, format="PNG")
+        buf[name] = f.getvalue()
+
+    w1, h1, lap_sharp = sharpness(buf["sharp"])
+    w2, h2, lap_blur = sharpness(buf["blur"])
+    assert (w1, h1) == (600, 400), (w1, h1)
+    assert lap_sharp > lap_blur * 3, (lap_sharp, lap_blur)
+
+
+def test_filter_poi_photos_drops_blurry_and_small_but_not_unknown():
+    from types import SimpleNamespace
+
+    from tripagent.providers.images import filter_poi_photos
+
+    scores = {
+        "http://x/sharp.jpg": [1200, 900, 88.0],
+        "http://x/blur.jpg": [1200, 900, 2.0],
+        "http://x/small.jpg": [200, 150, 90.0],      # 分辨率不够，再锐也铺不满卡片
+    }
+    chain = SimpleNamespace(run=lambda *a, **k: SimpleNamespace(value=scores, source="amap_search"))
+    settings = SimpleNamespace(image_min_edge=420, image_min_lapvar=11.0)
+    poi = SimpleNamespace(photos=["http://x/blur.jpg", "http://x/small.jpg",
+                                  "http://x/sharp.jpg", "http://x/unknown.jpg"])
+
+    dropped, touched = filter_poi_photos(chain, settings, [poi])
+
+    assert poi.photos[0] == "http://x/sharp.jpg", poi.photos      # 最清晰的排最前
+    assert "http://x/unknown.jpg" in poi.photos, poi.photos        # 没量到的不判死刑
+    assert "http://x/blur.jpg" not in poi.photos
+    assert "http://x/small.jpg" not in poi.photos
+    assert (dropped, touched) == (2, 1), (dropped, touched)
+
+    # 离线/取不到分数时必须原样放行，不能把界面弄成空白
+    chain0 = SimpleNamespace(run=lambda *a, **k: SimpleNamespace(value={}, source="none"))
+    poi2 = SimpleNamespace(photos=["a", "b"])
+    assert filter_poi_photos(chain0, settings, [poi2]) == (0, 0)   # 没打分 = 没淘汰
+    assert poi2.photos == ["a", "b"]
 
 
 def test_amap_payload_carries_photos_into_poi_record(city):

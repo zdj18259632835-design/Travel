@@ -70,6 +70,12 @@ class Settings(BaseSettings):
     access_codes: str = Field(default="", alias="TRIPAGENT_ACCESS_CODES")
     # 站长口令：无视日额度上限，到量后仍可继续演示。绝不写进仓库，只放密文变量。
     owner_code: str = Field(default="", alias="TRIPAGENT_OWNER_CODE")
+
+    # ---- 实拍图质量闸门（糊图比没图更伤观感）----
+    # 短边像素下限：低于这个数，铺满卡片宽度必然发糊
+    image_min_edge: int = Field(default=420, alias="TRIPAGENT_IMAGE_MIN_EDGE")
+    # 拉普拉斯方差下限：清晰度指标，越小越糊（失焦/重压缩会掉到个位数）
+    image_min_lapvar: float = Field(default=11.0, alias="TRIPAGENT_IMAGE_MIN_LAPVAR")
     http_user_agent: str = "Mozilla/5.0 (compatible; TripAgent/0.1; +https://local.demo)"
 
     # ---- 数据源降级链（越靠前优先级越高，失败/为空则落到下一个）----

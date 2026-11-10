@@ -116,59 +116,98 @@ def weather_panel(weather, window, alarms) -> None:
         st.caption("当前无生效气象预警。")
 
 
-def gallery(urls: list[str], caption: str = "", source_note: str = "高德公开图") -> str:
-    """活动实拍图的纯 CSS 轮播。
+def _badge_text(s: Slot) -> str:
+    """卡片头部的徽标。文本全部来自外部接口，进 markdown 前先转义。"""
+    from html import escape as _e
 
-    为什么不用 JS：Streamlit 的 markdown 会剥掉 <script>，塞 iframe 又要固定高度、
-    一天十几个卡片各自一个文档，代价比效果大。CSS keyframes 交叉淡入淡出足够，
-    而且断网、无 CDN、无依赖也能跑（和整体样式层一个原则）。
-    """
-    import html as _h
-
-    pics = [u for u in urls if isinstance(u, str) and u.startswith("http")][:4]
-    if not pics:
-        return ""
-    imgs = "".join(
-        f'<img src="{_h.escape(u, quote=True)}" alt="" loading="lazy" referrerpolicy="no-referrer">'
-        for u in pics
-    )
-    cap = _h.escape(f"{caption} · {source_note}" if caption else source_note)
-    return f'<div class="gal n{len(pics)}">{imgs}<span class="cap">{cap}</span></div>'
-
-
-def day_panel(day: DayPlan, audience: str) -> str:
-    """一天的 HTML：实拍图 + 时段 + 项目 + 理由，不显示钟点与通勤。"""
     from tripagent.models.common import fmt_cny
 
-    import html as _h
+    bits = []
+    if s.cost_cents:
+        bits.append(fmt_cny(s.cost_cents))
+    elif s.poi and s.poi.price_cents == 0 and s.type.label != "入住退房":
+        bits.append("免费")
+    elif s.poi:
+        bits.append("价格待确认")
+    if s.reservation_hint:
+        bits.append(f"⏰ {s.reservation_hint}")
+    return " · ".join(_e(b) for b in bits)
 
-    chunks = []
+
+def photo_gallery(poi, key: str) -> None:
+    """一张大图 + 左右箭头 + 点击放大。
+
+    为什么不再是自动轮播：
+      1. 自动轮播用 CSS `object-fit: cover` 铺满固定高度卡片，等于**裁掉**画面上下——
+         建筑拍不全、菜拍半盘，用户看到的"图不好"其实是"图被我们切了"；
+      2. 自动跳图让人来不及看就被换走，还会诱导"看个大概"；改成手动翻页，
+         看的人掌握节奏，也才能真的把一张图看完。
+    st.image 默认保持原始宽高比（不裁切），配合 width="stretch" 铺满卡片宽度，
+    比原来的 260px 高窗口大得多，画面信息量完全不同。
+    """
+    urls = list(getattr(poi, "photos", None) or [])
+    if not urls:
+        return
+    state_key = f"gal:{key}"
+    idx = min(max(0, int(st.session_state.get(state_key, 0))), len(urls) - 1)
+    st.image(urls[idx], width="stretch", clamp=True,
+             caption=f"{poi.name} · 高德公开图（第 {idx + 1}/{len(urls)} 张）")
+    c1, c2, c3 = st.columns([1, 1, 7])
+    if c1.button("◀", key=f"prev:{key}", disabled=idx <= 0, help="上一张"):
+        st.session_state[state_key] = idx - 1
+        st.rerun()
+    if c2.button("▶", key=f"next:{key}", disabled=idx >= len(urls) - 1, help="下一张"):
+        st.session_state[state_key] = idx + 1
+        st.rerun()
+    if c3.button("🔍 放大看", key=f"zoom:{key}", help="在弹层里看大图，可继续翻页"):
+        _zoom_dialog(urls, idx, poi.name, key)
+
+
+@st.dialog("活动实拍图", width="large")
+def _zoom_dialog(urls: list[str], idx: int, title: str, key: str) -> None:
+    """弹层大图。翻页时同步主卡片的页码，关掉弹层后停在同一张。"""
+    st.image(urls[idx], width="stretch", clamp=True)
+    c1, c2, c3 = st.columns([1, 1, 6])
+    if c1.button("◀ 上一张", key=f"zp:{key}:{idx}", disabled=idx <= 0):
+        st.session_state[f"gal:{key}"] = idx - 1
+        _zoom_dialog(urls, idx - 1, title, key)
+    if c2.button("下一张 ▶", key=f"zn:{key}:{idx}", disabled=idx >= len(urls) - 1):
+        st.session_state[f"gal:{key}"] = idx + 1
+        _zoom_dialog(urls, idx + 1, title, key)
+    st.caption(f"{title} · 第 {idx + 1}/{len(urls)} 张 · 高德公开图")
+
+
+def slot_block(s: Slot, audience: str, key: str) -> None:
+    """一条安排 = 图片 + 徽标 + 理由，全部用原生控件，这样才能挂点击事件。"""
+    from html import escape as _e
+
+    with st.container(border=True):
+        if s.poi:
+            photo_gallery(s.poi, key)
+        head = f"**{_e(s.title)}**"
+        badges = _badge_text(s)
+        if badges:
+            head += f" 　{badges}"
+        st.markdown(head)
+        st.markdown(f"为什么这个时段去：{_e(slot_reason(s, audience))}")
+        if s.poi and s.poi.why and not (s.extras or {}).get("audience_reason"):
+            st.caption(f"亮点：{s.poi.why[:90]}")
+        if s.poi and s.poi.pitfalls:
+            st.caption("避坑：" + "；".join(s.poi.pitfalls[:2]))
+
+
+def day_view(day: DayPlan, audience: str) -> None:
+    """一天：时段分组 → 每组一条说明 → 逐条安排卡片。"""
+    from html import escape as _h
+
     for band, slots in day.by_band():
-        items = []
+        st.markdown(
+            f'<div class="band"><div class="bandname">{_h(band)}</div></div>',
+            unsafe_allow_html=True,
+        )
+        if BAND_NOTE.get(band):
+            st.caption(BAND_NOTE[band])
         for s in slots:
-            badges = []
-            if s.cost_cents:
-                badges.append(fmt_cny(s.cost_cents))
-            elif s.poi and s.poi.price_cents == 0 and s.type.label != "入住退房":
-                badges.append("免费")
-            elif s.poi:
-                badges.append("价格待确认")
-            if s.reservation_hint:
-                badges.append(f"⏰ {s.reservation_hint}")
-            lines = [f"为什么这个时段去：{slot_reason(s, audience)}"]
-            if s.poi and s.poi.why and not (s.extras or {}).get("audience_reason"):
-                lines.append(f"亮点：{s.poi.why[:90]}")
-            if s.poi and s.poi.pitfalls:
-                lines.append("避坑：" + "；".join(s.poi.pitfalls[:2]))
-            kind = "night" if s.type.label in ("夜间娱乐", "观看演出") else ("meal" if s.type.label == "用餐" else "day")
-            pic = gallery(s.poi.photos, s.poi.name) if s.poi else ""
-            items.append(_card(_h.escape(s.title), kind, [_h.escape(b) for b in badges],
-                               [_h.escape(x) for x in lines], pic))
-        chunks.append(f'<div class="band"><div class="bandname">{_h.escape(band)}</div>{"".join(items)}</div>')
-    return "".join(chunks)
-
-
-def _card(title: str, kind: str, badges: list[str], lines: list[str], pic: str = "") -> str:
-    tags = "".join(f'<span class="tag">{b}</span>' for b in badges)
-    body = "".join(f'<div class="why">{ln}</div>' for ln in lines)
-    return f'<div class="slot {kind}">{pic}<b>{title}</b>{tags}{body}</div>'
+            # key 必须带天数：Slot.seq 每天从 1 重新计，只靠序号会在跨天撞车，
+            # 撞车的后果是两张卡片共享同一个翻页位置——很难查，所以在这里就堵死。
+            slot_block(s, audience, f"d{day.index}s{s.seq}")

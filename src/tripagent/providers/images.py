@@ -21,7 +21,7 @@ from typing import Any
 import httpx
 
 from ..knowledge.cities import CityInfo
-from .base import Provider, ProviderError, provider
+from .base import Chain, Provider, ProviderError, provider
 from .poi import amap_photos
 
 
@@ -62,6 +62,49 @@ def keep_alive(urls: list[str], timeout: float = 3.0) -> list[str]:
 
     with ThreadPoolExecutor(max_workers=min(6, len(urls))) as pool:
         return [u for u, ok in zip(urls, pool.map(check, urls)) if ok]
+
+
+def sharpness(data: bytes) -> tuple[int, int, float]:
+    """清晰度打分：返回 (宽, 高, 拉普拉斯方差)。
+
+    拉普拉斯方差是"对焦清晰度"的经典无参考指标（image-focus-measure、
+    pyimagesearch 的 blur detection 示例、以及大量 GitHub 项目用的都是它）：
+    对灰度图做 4 邻域拉普拉斯卷积，边缘越锐利响应越大，方差就越大；
+    糊图的梯度被抹平，方差会掉到个位数。
+
+    为什么不用 OpenCV：cv2.Laplacian 在这里没有不可替代性，numpy 切片一行就是同一个核，
+    而装 opencv-python 会给创空间镜像多加 60MB+。依赖要算账。
+
+    先等比缩到长边 512 再算，两个原因：不同来源的图分辨率差几十倍，
+    不缩放的方差没有可比性；以及大图全量卷积会拖慢取图这一步。
+    """
+    import io
+
+    import numpy as np
+    from PIL import Image
+
+    im = Image.open(io.BytesIO(data)).convert("L")
+    w, h = im.size
+    if max(w, h) > 512:
+        scale = 512.0 / max(w, h)
+        im = im.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.BILINEAR)
+    a = np.asarray(im, dtype=np.float32)
+    if a.shape[0] < 3 or a.shape[1] < 3:
+        return w, h, 0.0
+    lap = a[2:, 1:-1] + a[:-2, 1:-1] + a[1:-1, 2:] + a[1:-1, :-2] - 4.0 * a[1:-1, 1:-1]
+    return w, h, float(lap.var())
+
+
+def score_url(url: str, timeout: float = 6.0) -> tuple[int, int, float] | None:
+    """下载并打分；拿不到字节时返回 None（调用方按"未知"处理，不误杀）。"""
+    try:
+        r = httpx.get(url, timeout=timeout, follow_redirects=True,
+                      headers={"User-Agent": "Mozilla/5.0 (compatible; TripAgent/0.1)"})
+        if r.status_code >= 400 or not r.content:
+            return None
+        return sharpness(r.content)
+    except Exception:
+        return None
 
 
 @provider("images", "amap_search")
@@ -117,6 +160,26 @@ class AMapImages(Provider):
         return out
 
 
+    def quality(self, urls: list[str]) -> dict[str, list]:
+        """批量打分：url -> [宽, 高, 拉普拉斯方差]。分数落盘缓存，同图全站只下一次。"""
+        todo = [u for u in dict.fromkeys(urls) if u]
+        if not todo:
+            return {}
+
+        def scored(u: str) -> list:
+            def fetch() -> list:
+                got = score_url(u)
+                return list(got) if got else []
+            try:
+                return self.cached_call(("imgq", u), fetch) or []
+            except Exception:
+                return []
+
+        with ThreadPoolExecutor(max_workers=min(8, len(todo))) as pool:
+            results = list(pool.map(scored, todo))
+        return {u: got for u, got in zip(todo, results) if got}
+
+
 @provider("images", "fixture")
 class FixtureImages(Provider):
     """离线兜底：本地知识库里若已存过实拍图就直接用，没有就不显示。
@@ -145,3 +208,43 @@ class FixtureImages(Provider):
             if got:
                 out[name] = got
         return out
+
+
+def filter_poi_photos(chain: Chain, settings, pois, per_poi: int = 4) -> tuple[int, int]:
+    """给一批 POI 筛掉糊图与小图，并把最清晰的一张排到最前。
+
+    返回 (淘汰张数, 受影响地点数)。
+
+    判据是两条硬事实，不是审美：
+      短边 < image_min_edge      → 放大到卡片宽度必然发糊，丢；
+      拉普拉斯方差 < image_min_lapvar → 梯度被抹平（失焦或压缩糊），丢。
+    打分拿不到（离线、超时、防盗链）时**不判死刑**：保留原图，
+    因为"我们没量到"和"图确实糊"是两件事，界面不该因为前者变成空白。
+    """
+    targets = [p for p in pois if getattr(p, "photos", None)]
+    if not targets:
+        return 0, 0
+    urls = [u for p in targets for u in p.photos]
+    res = chain.run("images", "quality", urls, allow_empty=True)
+    scores = res.value if isinstance(res.value, dict) else {}
+    if not scores:
+        return 0, 0
+    min_edge = settings.image_min_edge
+    min_lap = settings.image_min_lapvar
+    dropped = 0
+    for p in targets:
+        ranked: list[tuple[float, str]] = []
+        for u in p.photos:
+            got = scores.get(u)
+            if not got:
+                ranked.append((min_lap + 1, u))       # 未知：保留，排在合格图之后
+                continue
+            w, h, lap = got[0], got[1], got[2]
+            if min(w, h) < min_edge or lap < min_lap:
+                continue
+            ranked.append((lap, u))
+        ranked.sort(key=lambda x: -x[0])
+        kept = [u for _lap, u in ranked][:per_poi]
+        dropped += len(p.photos) - len(kept)
+        p.photos = kept
+    return dropped, len(targets)
