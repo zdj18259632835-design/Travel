@@ -80,6 +80,9 @@ class Settings(BaseSettings):
 
     # ---- 数据源降级链（越靠前优先级越高，失败/为空则落到下一个）----
     forecast_chain: str = "qweather,open_meteo,fixture"
+    # 空气质量：免密钥、与预报同域名，用来补"要不要戴口罩/有氧放什么时候"
+    # 字段名必须等于 "<capability>_chain"，否则 Chain 找不到这条降级链（air_chain 就是踩过的坑）
+    air_quality_chain: str = "open_meteo,fixture"
     alarm_chain: str = "qweather,cma_alarm,nmc_alarm,fixture"
     poi_chain: str = "amap,fixture"
     transit_chain: str = "amap,estimated"

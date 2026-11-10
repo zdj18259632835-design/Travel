@@ -140,7 +140,9 @@ class TripService:
             lng=city.lng,
             forecast=bundle.forecast.value or [],
             alarms=bundle.alarms.value or [],
-            notes={"forecast": bundle.forecast.source, "alarm": bundle.alarms.source},
+            air=bundle.air.value or [],
+            notes={"forecast": bundle.forecast.source, "alarm": bundle.alarms.source,
+                   "air": bundle.air.source},
         )
         outcome.weather = weather
         outcome.trace.append(f"预报窗口 {horizon} 天：行程 {req.days} 天 + 2 天缓冲（出发前 {lead_days} 天）")

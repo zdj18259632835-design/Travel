@@ -329,3 +329,62 @@ def test_gate_reason_shown_when_login_required_is_pure_text():
 
     g = decide("tianchi2026", "", 0, 0, "")
     assert not g.allowed and "口令" in g.reason
+
+
+# ---------------------------------------------------------------- 空气质量与天文
+def _sunny(start: date, i: int = 0) -> DayForecast:
+    return DayForecast(date=start + timedelta(days=i), wmo_code=0, text="晴",
+                       tmax_c=22.0, tmin_c=12.0, wind_max_kmh=8.0, humidity_max=60)
+
+
+def test_clean_air_day_stays_outdoor_but_polluted_day_flips_indoor():
+    """晴天 + 高 PM2.5 是最容易被漏掉的组合：只看天气会误判"适合全天户外"。"""
+    from tripagent.models.weather import AirQuality
+
+    start = date(2026, 11, 25)
+    clean = AirQuality(date=start, aqi_us=42.0, pm25_max=10.0, source="fixture")
+    dirty = AirQuality(date=start, aqi_us=168.0, pm25_max=125.0, source="fixture")
+    r_clean = weather_risk.assess_day(_sunny(start), [], Party(adults=2), clean)
+    r_dirty = weather_risk.assess_day(_sunny(start), [], Party(adults=2), dirty)
+    assert r_clean.severity.rank == Severity.NONE.rank and not r_clean.prefer_indoor
+    assert r_dirty.prefer_indoor and any(x.name.startswith("空气污染") for x in r_dirty.factors)
+    assert any("KN95" in a for a in r_dirty.advice), r_dirty.advice
+
+
+def test_verdict_shows_aqi_and_astronomy_only_when_data_exists():
+    from tripagent.models.weather import AirQuality, CityWeather
+
+    start = date(2026, 11, 25)          # 周三
+    f = _sunny(start)
+    f.moon_phase, f.moonrise = 0.03, "07:41"
+    air = AirQuality(date=start, aqi_us=118.0, pm25_max=90.0, o3_max=170.0, source="fixture")
+    w = CityWeather(city="兰州", city_key="lanzhou", lat=36.06, lng=103.83,
+                    forecast=[f], air=[air])
+    weather_risk.assess(w, [start], Party(adults=2))
+    v = weather_risk.day_verdict(f, w.risk_on(start), 1, 1, 0, air)
+    assert "空气质量" in v["why"], v["why"]
+    assert "观星" in v["advice"] or "月升" in v["advice"], v["advice"]
+    assert "臭氧" in v["tips"], v["tips"]
+
+    # 没有空气质量数据时，绝不凭空写一句 AQI
+    v2 = weather_risk.day_verdict(_sunny(start), None)
+    assert "空气质量" not in v2["why"], v2["why"]
+
+
+def test_packing_adds_mask_only_when_air_is_flagged():
+    from tripagent.core.planner import _packing
+    from tripagent.models.plan import DayPlan
+    from tripagent.models.request import Party, TripRequest
+
+    req = TripRequest(raw_text="x", destination="成都", days=1, party=Party(adults=2))
+    start = date(2026, 11, 25)
+    risk = weather_risk.assess_day(_sunny(start), [], Party(adults=2), None)
+    day = DayPlan(index=1, date=start, city="成都", slots=[], risk=risk)
+    assert not any("KN95" in i for i in _packing(req, [day]))
+
+    from tripagent.models.weather import AirQuality
+
+    risk2 = weather_risk.assess_day(_sunny(start), [], Party(adults=2),
+                                    AirQuality(date=start, aqi_us=170.0, pm25_max=130.0))
+    day2 = DayPlan(index=1, date=start, city="成都", slots=[], risk=risk2)
+    assert any("KN95" in i for i in _packing(req, [day2]))

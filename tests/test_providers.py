@@ -358,3 +358,78 @@ def test_llm_refuses_when_daily_token_budget_exhausted(tmp_path):
     UsageLedger(s.usage_path).record(prompt=2000)
     with pytest.raises(ProviderError, match="额度"):
         DashScope(s, Cache(s)).chat([{"role": "user", "content": "hi"}])
+
+
+# ---------------------------------------------------------------- 空气质量 / 月相
+def test_fixture_air_is_deterministic_and_levelled():
+    from datetime import date
+
+    from tripagent.knowledge.cities import get_city
+    from tripagent.providers.weather import FixtureAir
+
+    s = get_settings()
+    prov = FixtureAir(s, Cache(s))
+    a = get_city("chengdu")
+    d1 = prov.fetch_air(a, 5)
+    d2 = prov.fetch_air(a, 5)
+    assert [(x.date, x.aqi_us) for x in d1] == [(x.date, x.aqi_us) for x in d2], "离线兜底必须可复现"
+    assert len(d1) == 5 and all(x.source == "fixture" for x in d1)
+    assert {x.level for x in d1} <= {"优", "良", "轻度污染", "中度污染", "重度污染"}
+
+
+def test_moon_phase_matches_known_new_and_full_moon():
+    """月相用朔望月周期算，先对两个已知日期，再谈用它给观星建议。"""
+    from datetime import date
+
+    from tripagent.providers.weather import _moon_phase
+
+    assert _moon_phase(date(2026, 11, 9)) < 0.06 or _moon_phase(date(2026, 11, 9)) > 0.94  # 新月附近
+    full = _moon_phase(date(2026, 11, 24))          # 满月附近
+    assert 0.40 <= full <= 0.60, full
+
+
+def test_every_registered_capability_has_a_chain():
+    """能力名与配置字段名必须对得上：<capability>_chain。
+
+    拼错的后果不是报错，而是 Chain 静默返回空结果——界面看起来"这个数据源就是没有"，
+    排查起来极其费劲。这条测试把整类错误一次性堵住。
+    """
+    from tripagent.providers import registry_snapshot
+
+    s = get_settings()
+    for cap in sorted(registry_snapshot()):
+        raw = getattr(s, f"{cap}_chain", None)
+        assert raw, f"能力 {cap} 已注册，但缺少 {cap}_chain 配置项"
+        if not s.offline:
+            # 离线模式会把联网源全部过滤掉，链路为空是设计而不是 bug
+            assert s.chain(cap), f"能力 {cap} 的链路 {raw!r} 解析后为空"
+
+
+def test_amap_photo_urls_are_upgraded_to_original_size():
+    """高德 showpic 默认给缩略图，加参数才是原图：先要大图，再谈筛糊图。"""
+    from tripagent.providers.poi import amap_photos
+
+    row = {"photos": [
+        {"url": "https://store.is.autonavi.com/showpic/aaa111"},
+        {"url": "https://store.is.autonavi.com/showpic/bbb222?type=pic"},
+        {"url": "http://store.is.autonavi.com/showpic/ccc333"},
+        {"url": "https://other.example.com/x.jpg"},
+    ]}
+    got = amap_photos(row)
+    assert got[0] == "https://store.is.autonavi.com/showpic/aaa111?operate=original", got
+    assert got[1].endswith("bbb222?type=pic"), got            # 已带参数的不重复加
+    assert got[2] == "https://store.is.autonavi.com/showpic/ccc333?operate=original", got
+    assert got[3] == "https://other.example.com/x.jpg", got   # 别家域名不动
+
+
+def test_air_quality_never_invents_days_beyond_the_api_limit():
+    """真实接口只给 7 天（第 8 天 HTTP 400）。
+
+    兜底源必须守同一个上限：否则超出部分会变成 fixture 编出来的 AQI 数字，
+    而"空气质量 良"这种话一旦被当成真数据展示，整份方案的可信度就跟着一起塌。
+    """
+    from tripagent.knowledge.cities import get_city
+    from tripagent.providers.weather import FixtureAir
+
+    s = get_settings()
+    assert len(FixtureAir(s, Cache(s)).fetch_air(get_city("chengdu"), 30)) == 7

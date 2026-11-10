@@ -18,7 +18,7 @@ from ..config import get_settings
 from ..knowledge.cities import CityInfo
 from ..knowledge.wmo import describe
 from ..models.enums import Severity
-from ..models.weather import AlarmRecord, DayForecast, LEVEL_TO_SEVERITY
+from ..models.weather import AirQuality, AlarmRecord, DayForecast, LEVEL_TO_SEVERITY
 from .base import Provider, ProviderError, provider
 
 
@@ -52,6 +52,9 @@ class OpenMeteo(Provider):
                     "uv_index_max",
                     "sunrise",
                     "sunset",
+                    "moonrise",
+                    "moonset",
+                    "moon_phase",
                 ]
             ),
             "timezone": "Asia/Shanghai",
@@ -84,6 +87,9 @@ class OpenMeteo(Provider):
                         uv_index=_num(daily.get("uv_index_max"), i),
                         sunrise=str((daily.get("sunrise") or [""] * (i + 1))[i] or "")[11:16] or None,
                         sunset=str((daily.get("sunset") or [""] * (i + 1))[i] or "")[11:16] or None,
+                        moonrise=str((daily.get("moonrise") or [""] * (i + 1))[i] or "")[11:16] or None,
+                        moonset=str((daily.get("moonset") or [""] * (i + 1))[i] or "")[11:16] or None,
+                        moon_phase=_num(daily.get("moon_phase"), i),
                         source="open_meteo",
                     )
                 )
@@ -93,7 +99,7 @@ class OpenMeteo(Provider):
 
         # 字段集变了就换 key 版本：否则旧缓存里没有紫外线，新建议会莫名缺一条，
         # 排查起来还像是规则引擎的 bug。
-        return self.cached_call(("forecast", "open_meteo", "v2", city.key, days), fetch, DayForecast)
+        return self.cached_call(("forecast", "open_meteo", "v3", city.key, days), fetch, DayForecast)
 
 
 def _num(seq: Any, i: int) -> float | None:
@@ -101,6 +107,94 @@ def _num(seq: Any, i: int) -> float | None:
         return None
     v = seq[i]
     return float(v) if isinstance(v, (int, float)) else None
+
+
+@provider("air_quality", "open_meteo")
+class OpenMeteoAir(Provider):
+    """空气质量：免密钥，与预报同一个域名，因此不引入新的失败模式。
+
+    接口给的是逐小时序列，这里取当天最大值——游客关心的是"那天最脏的时候有多脏"，
+    取平均会把夜间低谷算进去，系统性低估白天的暴露风险。
+    """
+
+    BASE = "https://air-quality-api.open-meteo.com/v1/air-quality"
+
+    def fetch_air(self, city: CityInfo, days: int = 7) -> list[AirQuality]:
+        # 接口只给 7 天：实测 forecast_days=8 直接 HTTP 400。
+        # 超出的日子就"没有空气质量数据"，让界面不提，也比让 fixture 编数好。
+        days = max(1, min(int(days), 7))
+        params = {
+            "latitude": round(city.lat, 4),
+            "longitude": round(city.lng, 4),
+            "hourly": "pm2_5,pm10,ozone,us_aqi",
+            "timezone": "Asia/Shanghai",
+            "forecast_days": days,
+        }
+
+        def fetch() -> list[AirQuality]:
+            payload = self.get_json(self.BASE, params)
+            h = (payload or {}).get("hourly") or {}
+            times = h.get("time") or []
+            if not times:
+                raise ProviderError("open-meteo 空气质量返回空序列")
+
+            def daily_max(key: str) -> dict[str, float]:
+                out: dict[str, float] = {}
+                for t, v in zip(times, h.get(key) or []):
+                    if not isinstance(v, (int, float)):
+                        continue
+                    day = str(t)[:10]
+                    out[day] = max(out.get(day, 0.0), float(v))
+                return out
+
+            pm25, pm10, o3, aqi = (daily_max(k) for k in ("pm2_5", "pm10", "ozone", "us_aqi"))
+            out = []
+            for day in sorted({str(t)[:10] for t in times}):
+                d = _parse_date(day)
+                if not d:
+                    continue
+                out.append(AirQuality(
+                    date=d,
+                    pm25_max=pm25.get(day),
+                    pm10_max=pm10.get(day),
+                    o3_max=o3.get(day),
+                    aqi_us=aqi.get(day),
+                    source="open_meteo",
+                ))
+            if not out:
+                raise ProviderError("open-meteo 空气质量无有效日期")
+            return out
+
+        return self.cached_call(("air_quality", "open_meteo", city.key, days), fetch, AirQuality)
+
+
+@provider("air_quality", "fixture")
+class FixtureAir(Provider):
+    """离线兜底：按纬度与季节给一个稳定、可复现的空气质量近似。
+
+    刻意不叫"真实值"：source=fixture，界面与导出都会显示来源。
+    """
+
+    def fetch_air(self, city: CityInfo, days: int = 7) -> list[AirQuality]:
+        days = max(1, min(int(days), 7))      # 与真实源同样的上限，别让兜底超出可得范围
+        today = date.today()
+        out: list[AirQuality] = []
+        for i in range(days):
+            d = today + timedelta(days=i)
+            rng = _stable_rng(f"air-{city.key}-{d.isoformat()}")
+            # 冬季供暖期 + 盆地地形（低海拔）更容易积污，只做粗颗粒近似
+            seasonal = 1.35 if d.month in (11, 12, 1, 2) else 0.85
+            base = 35 + 45 * rng() * seasonal
+            aqi = int(max(20, min(220, base)))
+            out.append(AirQuality(
+                date=d,
+                pm25_max=round(aqi * 0.7, 1),
+                pm10_max=round(aqi * 0.95, 1),
+                o3_max=round(40 + 60 * rng(), 1),
+                aqi_us=float(aqi),
+                source="fixture",
+            ))
+        return out
 
 
 @provider("forecast", "qweather")
@@ -308,6 +402,7 @@ class FixtureWeather(Provider):
                     wind_max_kmh=round(8 + rng() * 26, 1),
                     humidity_max=int(50 + rng() * 45),
                     uv_index=_uv_estimate(code, city.lat, d.month),
+                    moon_phase=_moon_phase(d),
                     source="fixture",
                 )
             )
@@ -357,6 +452,18 @@ def _uv_estimate(code: int, lat: float, month: int) -> float:
                 6: 1.05, 7: 1.1, 8: 1.05, 9: 0.9, 10: 0.7, 11: 0.55}[month]
     base = 9.0 - 0.055 * max(0.0, abs(lat) - 20.0)
     return round(max(0.5, min(12.0, base * seasonal * clear)), 1)
+
+
+def _moon_phase(d: date) -> float:
+    """月相 0-1（0 新月、0.5 满月）：用一个已知新月起点的朔望月周期算。
+
+    这条可以离线计算，因为月相是天文历算而不是观测数据——
+    误差在几小时量级，而我们要回答的只是"今晚适不适合看银河"。
+    """
+    epoch = datetime(2000, 1, 6, 18, 14)          # 2000-01-06 新月（UTC）
+    synodic = 29.530588853
+    days = (datetime(d.year, d.month, d.day) - epoch).total_seconds() / 86400.0
+    return round((days % synodic) / synodic, 3)
 
 
 def _stable_rng(seed: str):

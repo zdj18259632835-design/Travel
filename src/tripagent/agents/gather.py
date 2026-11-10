@@ -25,7 +25,7 @@ from ..models.enums import Category, Interest
 from ..models.evidence import EvidenceRecord
 from ..models.poi import POIQuery, POIRecord
 from ..models.request import TripRequest
-from ..models.weather import DayForecast
+from ..models.weather import AirQuality, DayForecast
 from ..providers.base import Chain, ChainResult
 
 
@@ -34,6 +34,7 @@ class Bundle:
     """一次规划需要的全部外部数据，取回即冻结。"""
 
     forecast: ChainResult = field(default_factory=ChainResult)
+    air: ChainResult = field(default_factory=ChainResult)
     alarms: ChainResult = field(default_factory=ChainResult)
     pois: dict[Category, ChainResult] = field(default_factory=dict)
     hotels: ChainResult = field(default_factory=ChainResult)
@@ -55,6 +56,7 @@ class Bundle:
     def trace(self) -> list[str]:
         out = [f"并发取数 {self.tasks} 路，总耗时 {self.elapsed_s:.1f}s"]
         out.append(f"  预报:{self.forecast.source} {len(self.forecast.value or [])} 天")
+        out.append(f"  空气质量:{self.air.source} {len(self.air.value or [])} 天")
         out.append(f"  预警:{self.alarms.source} {len(self.alarms.value or [])} 条")
         for cat, res in self.pois.items():
             out.append(f"  POI {cat.value}：{res.source} {len(res.value or [])} 条")
@@ -102,6 +104,7 @@ def gather(
     cats = poi_categories(req)
     jobs: dict[str, Any] = {
         "forecast": lambda: chain.run("forecast", "fetch_forecast", city, horizon, model=DayForecast),
+        "air": lambda: chain.run("air_quality", "fetch_air", city, min(horizon, 10), model=AirQuality),
         "alarms": lambda: chain.run("alarm", "fetch_alarms", city, allow_empty=True),
         "hotels": lambda: chain.run(
             "poi", "search", city,
@@ -147,6 +150,8 @@ def gather(
                     )
                 if key == "forecast":
                     b.forecast = res
+                elif key == "air":
+                    b.air = res
                 elif key == "alarms":
                     b.alarms = res
                 elif key == "evidence":

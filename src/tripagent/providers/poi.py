@@ -70,11 +70,26 @@ class AMapPOI(Provider):
             rows = data.get("pois") or []
             return [rec for rec in (_amap_to_poi(r, city, query.category) for r in rows) if rec and not rec.closed]
 
-        key_parts = ("poi", "amap", "v2", city.key, params.get("types"), params.get("keywords"), params.get("location"), params["page_size"])
+        key_parts = ("poi", "amap", "v3", city.key, params.get("types"), params.get("keywords"), params.get("location"), params["page_size"])
         return self.cached_call(key_parts, fetch, POIRecord)
 
 
 CLOSED_MARKERS = ("暂停营业", "停业", "歇业", "装修中", "关闭", "暂不开放", "暂停开放", "已搬迁")
+
+
+def _amap_photo_url(url: str) -> str:
+    """把高德图片链接换成原图尺寸。
+
+    实测同一张图：`showpic/<hash>` 默认返回 375×500 的缩略图，
+    加上 `?operate=original`（或已有的 `?type=pic`）就是 1440×1920。
+    用户抱怨"图片像素差"，根因不在筛选，而在我们一直在拿小图当大图用——
+    所以先要原图，再谈筛糊图，顺序反了就会把好图也误杀一批。
+    """
+    if "store.is.autonavi.com/showpic/" not in url:
+        return url
+    if "?" in url:                 # 已带参数（如 type=pic），本身就是原图
+        return url
+    return url + "?operate=original"
 
 
 def amap_photos(row: dict, limit: int = 4) -> list[str]:
@@ -89,10 +104,10 @@ def amap_photos(row: dict, limit: int = 4) -> list[str]:
         if isinstance(p, dict):
             url = str(p.get("url") or "").strip()
             if url.startswith("http"):
-                out.append(url.replace("http://", "https://", 1))
+                out.append(_amap_photo_url(url.replace("http://", "https://", 1)))
     single = row.get("photo")
     if isinstance(single, str) and single.startswith("http"):
-        out.append(single.replace("http://", "https://", 1))
+        out.append(_amap_photo_url(single.replace("http://", "https://", 1)))
     seen: set[str] = set()
     deduped = [u for u in out if not (u in seen or seen.add(u))]
     return deduped[:limit]

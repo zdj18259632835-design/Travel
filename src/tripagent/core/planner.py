@@ -689,6 +689,12 @@ def _packing(req: TripRequest, days: list[DayPlan]) -> list[str]:
         items += ["防滑靴/暖宝宝", "手机保暖袋（低温掉电快）"]
     if windy:
         items.append("防风外套，避免戴易落帽子（索道/露天项目可能停运）")
+    polluted = any(
+        d.risk and any(x.name.startswith(("空气污染", "空气质量偏差")) for x in d.risk.factors)
+        for d in days
+    )
+    if polluted:
+        items.append("KN95 口罩（行程中有空气质量偏差的日子，敏感人群另备哮喘药）")
     if req.party.kids:
         items += ["儿童常用药、备用衣物", "推车或腰凳（日均步程较高时）"]
     if req.party.elders:

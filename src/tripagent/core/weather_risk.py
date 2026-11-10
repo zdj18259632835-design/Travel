@@ -11,7 +11,7 @@ from datetime import date
 
 from ..models.enums import Severity
 from ..models.request import Party
-from ..models.weather import AlarmRecord, CityWeather, DayForecast, RiskFactor, WeatherRisk
+from ..models.weather import AirQuality, AlarmRecord, CityWeather, DayForecast, RiskFactor, WeatherRisk
 
 # 灾害类型 → 该类型下"直接不建议出行"的最低级别
 _BLOCKING_ALARMS = {
@@ -67,10 +67,25 @@ def comfort_index(f: DayForecast) -> int:
     return int(max(0, min(100, round(score))))
 
 
-def assess_day(forecast: DayForecast, alarms: list[AlarmRecord], party: Party | None = None) -> WeatherRisk:
+def assess_day(forecast: DayForecast, alarms: list[AlarmRecord], party: Party | None = None,
+               air: AirQuality | None = None) -> WeatherRisk:
     """单日风险评估。规则全部展开写，方便二次开发逐条调整阈值。"""
     party = party or Party()
     risk = WeatherRisk(date=forecast.date, severity=Severity.NONE)
+
+    # 空气质量是独立于"天气现象"的一维：晴天静风 + 高 PM2.5 是最容易被漏掉的组合，
+    # 只看天气预报会给出"适合全天户外"的结论，而那天跑步其实不该出门。
+    if air is not None:
+        aqi = air.aqi_us or 0.0
+        pm = air.pm25_max or 0.0
+        if aqi >= 150 or pm >= 115:
+            risk.add(RiskFactor("空气污染", f"AQI {aqi:.0f}、PM2.5 {pm:.0f}µg/m³，敏感人群应避免户外",
+                                Severity.WARN, True))
+        elif aqi >= 100 or pm >= 75:
+            risk.add(RiskFactor("空气质量偏差", f"AQI {aqi:.0f}、PM2.5 {pm:.0f}µg/m³", Severity.WATCH, False))
+        if (air.o3_max or 0) >= 160:
+            risk.add(RiskFactor("臭氧偏高", f"午后臭氧 {air.o3_max:.0f}µg/m³，有氧运动放清晨更合适",
+                                Severity.WATCH, False))
 
     if forecast.wmo_code in (95, 96, 99):
         risk.add(RiskFactor("雷暴", f"{forecast.text}，户外排队项目与索道/玻璃栈道可能临时停运", Severity.WARN, True))
@@ -153,6 +168,12 @@ def _advice_for(risk: WeatherRisk, f: DayForecast, party: Party) -> list[str]:
         out.append("索道、游船、玻璃栈道、露天演出需现场确认是否开放")
     if any("结冰" in x.name or x.name.startswith("严寒") for x in risk.factors):
         out.append("鞋子防滑、手机保暖，自驾请确认路况")
+    if any(x.name.startswith("空气污染") for x in risk.factors):
+        out.append("空气质量差：把长时间步行与有氧换成室内场馆，敏感人群戴 KN95")
+    elif any(x.name == "空气质量偏差" for x in risk.factors):
+        out.append("空气质量一般，清晨比午后适合户外，久留的地方尽量靠绿化")
+    if any(x.name == "臭氧偏高" for x in risk.factors):
+        out.append("臭氧午后最高，跑步与骑行安排在清晨，傍晚再散步")
     # 下面三条只靠数值就能判定，以前漏掉会让"冷天"和"热天"给出同一条建议
     if f.tmin_c is not None and f.tmax_c is not None and f.tmax_c - f.tmin_c >= 12:
         out.append(f"昼夜温差 {f.tmax_c - f.tmin_c:.0f}℃，早晚外套、午间单衣，行程按可脱卸穿衣安排")
@@ -187,7 +208,7 @@ def assess(
 
     for f in weather.forecast:
         key = f.date.isoformat()
-        risks[key] = assess_day(f, alarms_by_day.get(key, []), party)
+        risks[key] = assess_day(f, alarms_by_day.get(key, []), party, weather.air_on(f.date))
     # 提取不到生效日期的预警，按"窗口期整体生效"处理：宁可保守，也不要漏掉台风/暴雨
     global_alarms = [a for a in weather.alarms if not _alarm_dates(a)]
     if global_alarms:
@@ -260,7 +281,7 @@ def _alarm_dates(a: AlarmRecord) -> list[str]:
 
 
 def day_verdict(f: DayForecast, risk: WeatherRisk | None, rank: int = 0, total: int = 0,
-                spread: int = 0) -> dict[str, str]:
+                spread: int = 0, air: AirQuality | None = None) -> dict[str, str]:
     """把一天的预报+风险压成一句人能直接决策的话，外加这天的健康提示。
 
     返回 verdict ∈ {outdoor, indoor, avoid}：
@@ -290,6 +311,9 @@ def day_verdict(f: DayForecast, risk: WeatherRisk | None, rank: int = 0, total: 
         advice = _indoor_advice(f, names, wet)
     else:
         advice = _outdoor_advice(f, wet, rank=rank, total=total, spread=spread)
+        astro = _astro_note(f)
+        if astro:
+            advice += f"；{astro}"
     return {
         "verdict": verdict,
         "date": f.date.strftime("%m/%d"),
@@ -297,16 +321,16 @@ def day_verdict(f: DayForecast, risk: WeatherRisk | None, rank: int = 0, total: 
         "headline": f"{f.text} {temps}",
         # why 只讲标题里没有的信号。以前 dry 日子会渲染成
         # 「晴 -5~6℃ — 晴，-5~6℃」，同一句话讲两遍，用户直接判定这是模板糊弄。
-        "why": "、".join(day_signals(f, wet)) or "无附加信号",
+        "why": "、".join(day_signals(f, wet, air)) or "无附加信号",
         "advice": advice,
-        "tips": "；".join(safety_tips(f, risk)),
+        "tips": "；".join(safety_tips(f, risk, air)),
         "comfort": str(comfort_index(f)),
         "severity": sev.label,
     }
 
 
-def day_signals(f: DayForecast, wet: str = "") -> list[str]:
-    """标题之外还能说点什么：风、湿度、紫外线、昼夜差、日落、舒适指数。"""
+def day_signals(f: DayForecast, wet: str = "", air: AirQuality | None = None) -> list[str]:
+    """标题之外还能说点什么：风、湿度、紫外线、昼夜差、日落、空气质量、舒适指数。"""
     from ..models.common import precip_level
 
     wet = wet or precip_level(f.precip_mm, f.precip_prob, f.text)
@@ -319,12 +343,32 @@ def day_signals(f: DayForecast, wet: str = "") -> list[str]:
         out.append(f"湿度 {f.humidity_max:.0f}%")
     if f.uv_index:
         out.append(f"紫外线 {f.uv_index:.0f}")
+    if air is not None and air.aqi_us is not None:
+        out.append(f"空气质量 {air.level}（AQI {air.aqi_us:.0f}）")
     if f.tmax_c is not None and f.tmin_c is not None and f.tmax_c - f.tmin_c >= 12:
         out.append(f"昼夜差 {f.tmax_c - f.tmin_c:.0f}℃")
     if f.sunset:
         out.append(f"日落 {f.sunset}")
     out.append(f"舒适指数 {comfort_index(f)}")
     return out
+
+
+def _astro_note(f: DayForecast) -> str:
+    """天文窗口：月相决定"今晚能不能看银河"。
+
+    只在数据真的存在时才说话：拿不到月相就一句不提，而不是编一句"月色不错"——
+    把天文写成模板，比不写更容易被看穿。
+    """
+    bits: list[str] = []
+    ph = f.moon_phase
+    if ph is not None:
+        if ph <= 0.15 or ph >= 0.85:
+            bits.append("月相近新月，光污染小的地方适合观星与银河长曝")
+        elif 0.35 <= ph <= 0.65:
+            bits.append("接近满月，月光会盖掉暗星，观星不如拍月景或夜色建筑")
+    if f.moonrise:
+        bits.append(f"月升 {f.moonrise}")
+    return "；".join(bits)
 
 
 def _avoid_advice(names: set[str]) -> str:
@@ -353,6 +397,13 @@ def _indoor_advice(f: DayForecast, names: set[str], wet: str) -> str:
         lead.append("11 点到 16 点交给室内或午休，傍晚再出门")
     if f.wmo_code in (45, 48):
         lead.append("有雾，观景台与摄影点价值下降，改逛古镇、早市、展馆")
+    if any(x.startswith("空气污染") for x in names):
+        lead.append("空气质量差：博物馆、展馆、商场、影院这类室内场馆优先，"
+                    "户外只留短时穿行，别在主干道旁排队等车")
+    elif any(x.startswith("空气质量偏差") for x in names):
+        lead.append("空气质量一般：户外段挑清晨与雨后，久留的地方靠绿化而不是靠商圈门口")
+    if "臭氧偏高" in names:
+        lead.append("午后臭氧高，骑行/徒步这类深呼吸的行程挪到清晨")
     if not lead:
         lead.append("以室内为主，户外只留天气最好的两三个小时")
     return "；".join(lead[:2])
@@ -409,7 +460,7 @@ def _outdoor_advice(f: DayForecast, wet: str, comfort: int | None = None,
     return "；".join(bits[:4])
 
 
-def safety_tips(f: DayForecast, risk: WeatherRisk | None = None) -> list[str]:
+def safety_tips(f: DayForecast, risk: WeatherRisk | None = None, air: AirQuality | None = None) -> list[str]:
     """这天的健康与安全提醒：只讲对身体要做什么，不讲行程怎么排。"""
     tips: list[str] = []
     tmax, tmin = f.tmax_c, f.tmin_c
@@ -439,6 +490,14 @@ def safety_tips(f: DayForecast, risk: WeatherRisk | None = None) -> list[str]:
         tips.append("大雾：能见度低，山区路段缓行，关节注意保暖")
     if risk and any(x.name.startswith(("霾", "扬沙", "沙尘")) for x in risk.factors):
         tips.append("沙尘或霾：戴 KN95，减少长时间户外有氧运动")
+    if air is not None:
+        aqi = air.aqi_us or 0
+        if aqi >= 150:
+            tips.append(f"空气质量 {air.level}（AQI {aqi:.0f}）：口罩 + 缩短户外，哮喘/心血管敏感者别安排徒步")
+        elif aqi >= 100:
+            tips.append(f"空气质量 {air.level}（AQI {aqi:.0f}）：户外有氧放清晨，午后少在主干道旁停留")
+        if (air.o3_max or 0) >= 160:
+            tips.append("臭氧偏高：跑步骑行改清晨，傍晚臭氧回落后再活动")
     return tips[:4]
 
 
@@ -462,7 +521,8 @@ def window_verdicts(weather: CityWeather, window: list) -> dict[str, list[dict[s
         if not f:
             missing.append(d.strftime("%m/%d"))
             continue
-        v = day_verdict(f, weather.risk_on(d), ranks.get(d.isoformat(), 0), len(scored), spread)
+        v = day_verdict(f, weather.risk_on(d), ranks.get(d.isoformat(), 0), len(scored), spread,
+                        weather.air_on(d))
         groups[v["verdict"]].append(v)
     groups["missing"] = missing  # type: ignore[assignment]
     return groups

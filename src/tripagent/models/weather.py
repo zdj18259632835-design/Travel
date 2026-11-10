@@ -29,6 +29,9 @@ class DayForecast(BaseModel):
     uv_index: float | None = None
     sunrise: str | None = None
     sunset: str | None = None
+    moonrise: str | None = None
+    moonset: str | None = None
+    moon_phase: float | None = None      # 0=新月, 0.5=满月
     source: str = "unknown"
 
     @property
@@ -50,6 +53,40 @@ class DayForecast(BaseModel):
     @property
     def is_cold(self) -> bool:
         return (self.tmin_c or 99) <= 0
+
+
+class AirQuality(BaseModel):
+    """某一天的空气质量（Open-Meteo Air Quality API，免密钥）。
+
+    为什么单独一个模型而不是塞进 DayForecast：两个接口的时间分辨率不同
+    （空气质量是逐小时、要自己取日内最大值），而且拿不到空气质量时
+    整个字段缺失比"预报里一半字段是 None"更好判断、更好降级。
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    date: _date
+    pm25_max: float | None = None
+    pm10_max: float | None = None
+    o3_max: float | None = None
+    aqi_us: float | None = None          # 0-500，美国 AQI，跨城市可比
+    pollen: float | None = None
+    source: str = "unknown"
+
+    @property
+    def level(self) -> str:
+        a = self.aqi_us
+        if a is None:
+            return "未知"
+        if a <= 50:
+            return "优"
+        if a <= 100:
+            return "良"
+        if a <= 150:
+            return "轻度污染"
+        if a <= 200:
+            return "中度污染"
+        return "重度污染"
 
 
 class AlarmRecord(BaseModel):
@@ -116,12 +153,16 @@ class CityWeather(BaseModel):
     lng: float | None = None
     forecast: list[DayForecast] = Field(default_factory=list)
     alarms: list[AlarmRecord] = Field(default_factory=list)
+    air: list[AirQuality] = Field(default_factory=list)
     risks: dict[str, WeatherRisk] = Field(default_factory=dict)
     overall: Severity = Severity.NONE
     notes: dict[str, Any] = Field(default_factory=dict)
 
     def on_day(self, d: _date) -> DayForecast | None:
         return next((f for f in self.forecast if f.date == d), None)
+
+    def air_on(self, d: _date) -> AirQuality | None:
+        return next((a for a in self.air if a.date == d), None)
 
     def risk_on(self, d: _date) -> WeatherRisk | None:
         return self.risks.get(d.isoformat())
