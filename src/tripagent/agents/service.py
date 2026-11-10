@@ -313,7 +313,7 @@ class TripService:
         pois = [s.poi for s in plan.all_slots if s.poi and s.type.label not in ("入住退房", "交通移动")]
         if not pois:
             return {}
-        res = self.chain.run("poi_crosscheck", "check", city, [p.name for p in pois][:8])
+        res = self.chain.run("poi_crosscheck", "check", city, [p.name for p in pois][:4])
         table = res.value or {}
         if not table:
             # 配了 Key 却一条都没校验上（Key 错、配额用尽、字段变了）必须留痕：

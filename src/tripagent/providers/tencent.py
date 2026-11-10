@@ -22,6 +22,21 @@ from .base import Provider, ProviderError, provider
 
 PLACE_SEARCH = "https://apis.map.qq.com/ws/place/v1/search"
 
+# 配额耗尽后，本次进程内不再撞第二次：status=121 的文案里有"每日调用量"。
+# 不这么做的话，每次规划都要白打 8 个请求，既拖慢又可能在平台侧被判异常流量。
+_QUOTA_WORDS = ("每日调用量", "上限", "配额", "quota", "rate")
+_quota_exhausted = False
+
+
+def quota_exhausted() -> bool:
+    return _quota_exhausted
+
+
+def _mark_quota_exhausted(message: str) -> None:
+    global _quota_exhausted
+    if any(w in message for w in _QUOTA_WORDS):
+        _quota_exhausted = True
+
 # 评分可能出现的字段（不同套餐/类型给的不一样）
 _RATING_KEYS = ("rating", "comment_score", "star", "overall_rating")
 # 营业时间可能出现的字段
@@ -121,9 +136,9 @@ class TencentCrossCheck(Provider):
             if data is None:
                 raise ProviderError("腾讯无响应或网络失败")
             if int(data.get("status", -1)) != 0:
-                raise ProviderError(
-                    f"腾讯返回 status={data.get('status')} {str(data.get('message'))[:80]}"
-                )
+                msg = f"腾讯返回 status={data.get('status')} {str(data.get('message'))[:80]}"
+                _mark_quota_exhausted(msg)
+                raise ProviderError(msg)
             best = pick_best(data.get("data") or [], name)
             if not best:
                 return {}
@@ -138,13 +153,15 @@ class TencentCrossCheck(Provider):
 
         return self.cached_call(("poi_crosscheck", "tencent", city.key, name), fetch)
 
-    def check(self, city: CityInfo, names: list[str], limit: int = 8) -> dict[str, dict]:
-        """逐个回查。配额有限，默认只校验最多 8 家——真正会被用户看到的就是这些。
+    def check(self, city: CityInfo, names: list[str], limit: int = 4) -> dict[str, dict]:
+        """逐个回查。配额有限，默认只校验最多 4 家——真正会被用户看到的就是这些。
 
         "一家都没查到"要分两种情况说：全都请求失败（Key 错、配额尽、字段变了）
         还是确实没有同名地点。前者必须抛出去，否则站长会以为校验在跑。
         """
         out: dict[str, dict] = {}
+        if _quota_exhausted:
+            raise ProviderError("腾讯配额今日已耗尽，本次跳过双源校验")
         errors: list[str] = []
         todo = [n for n in dict.fromkeys(names) if n and n.strip()][:limit]
         for name in todo:
@@ -167,5 +184,5 @@ class NoCrossCheck(Provider):
     def available(self) -> bool:
         return True
 
-    def check(self, city: CityInfo, names: list[str], limit: int = 8) -> dict[str, dict]:
+    def check(self, city: CityInfo, names: list[str], limit: int = 4) -> dict[str, dict]:
         return {}

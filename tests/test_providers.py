@@ -496,3 +496,26 @@ def test_crosscheck_reports_why_when_every_query_failed():
     city = get_city("chengdu")
     with pytest.raises(ProviderError, match="全部失败"):
         prov.check(city, ["不存在的店名甲", "不存在的店名乙"])
+
+
+def test_quota_exhausted_short_circuits_further_calls():
+    """配额耗尽之后，本次进程不该再撞第四次墙。"""
+    import pytest
+
+    from tripagent.config import get_settings
+    from tripagent.knowledge.cities import get_city
+    from tripagent.providers import tencent as tc
+    from tripagent.providers.base import Cache, ProviderError
+
+    s = get_settings()
+    s2 = s.model_copy(update={"tencent_map_key": "FAKE-KEY"})
+    prov = tc.TencentCrossCheck(s2, Cache(s2))
+    city = get_city("chengdu")
+    tc._quota_exhausted = False
+    with pytest.raises(ProviderError):
+        prov.check(city, ["甲店", "乙店", "丙店", "丁店"])
+    assert not tc.quota_exhausted(), "假 Key 的 311 不该被误判成配额耗尽"
+    tc._quota_exhausted = True
+    with pytest.raises(ProviderError, match="配额"):
+        prov.check(city, ["甲店"])
+    tc._quota_exhausted = False
