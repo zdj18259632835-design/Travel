@@ -133,6 +133,29 @@ def test_gallery_widgets_render_and_no_numeric_pitfalls_leak(outcome):
     assert not re.search(r"避坑[：:]\s*0?\.\d", texts), texts[:200]
 
 
+def test_poem_line_renders_in_real_app(outcome):
+    """诗词彩蛋必须在真实界面里出现，而且一句都不许重复。
+
+    只测 core 不够：这一行是 HTML 片段，转义、样式类名、extras 被后续步骤覆盖
+    这三件事都只有跑真实 app.py 才看得见。
+    """
+    from streamlit.testing.v1 import AppTest
+
+    assert any((s.extras or {}).get("poem") for s in outcome.plan.all_slots), "离线规划没挂上诗句"
+    at = AppTest.from_file(str(ROOT / "app.py"), default_timeout=120)
+    at.session_state["outcome"] = outcome
+    at.session_state["svc"] = None
+    at.run()
+    assert not at.exception, [e.value for e in at.exception]
+    blobs = [str(getattr(m, "value", "")) for m in at.markdown]
+    poems = [b for b in blobs if 'class="poem"' in b]
+    assert poems, "界面上没有诗词行"
+    verses = [p.split("「")[1].split("」")[0] for p in poems if "「" in p]
+    assert len(verses) == len(set(verses)), f"界面里同一句诗出现了两遍：{verses}"
+    for p in poems:
+        assert "——" in p, f"句子没带作者出处：{p[:120]}"
+
+
 def test_every_slot_has_audience_reason(outcome):
     """每条安排都要有理由，且理由不能是空话。"""
     forbidden = ("值得一去", "很有特色", "不容错过", "不错")

@@ -112,6 +112,15 @@ hr { border-color: rgba(61,107,90,.18); }
 .slot .tag.n { background: rgba(123,94,167,.14); color: #6b4f96; }
 .slot .tag.res { background: rgba(180,85,47,.14); color: #9a4526; }
 
+/* ---------- 诗词彩蛋（本地公版库，与"青绿"主色同系，不与避坑条抢注意力）---------- */
+.poem {
+    margin: 7px 0 0; padding: 6px 11px; border-radius: 8px;
+    background: rgba(107,155,124,.08); border-left: 2px solid rgba(47,93,78,.45);
+    font-family: "STZhongsong", "SimSun", serif; color: #2f5d4e; font-size: .86rem;
+}
+.poem .v { letter-spacing: .04em; }
+.poem .m { color: #6b7d76; font-size: .74rem; font-family: inherit; margin-top: 2px; }
+
 /* ---------- 侧边栏彻底隐藏（Key 状态与离线开关已移入自检页）---------- */
 #MainMenu, footer { visibility: hidden; }
 [data-testid="stSidebar"] { display: none; }

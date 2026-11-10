@@ -42,8 +42,8 @@ def _time_conflict(a: str, b: str) -> bool:
 
 
 def reconcile(pois: list[Any], table: dict[str, dict]) -> dict[str, int]:
-    """就地更新 POIRecord，返回统计（agree/conflict/filled/skipped）。"""
-    stats = {"agree": 0, "conflict": 0, "filled": 0, "skipped": 0}
+    """就地更新 POIRecord，返回统计（agree/conflict/filled/exists/skipped）。"""
+    stats = {"agree": 0, "conflict": 0, "filled": 0, "exists": 0, "skipped": 0}
     for p in pois:
         t = table.get(p.name)
         if not t:
@@ -81,5 +81,14 @@ def reconcile(pois: list[Any], table: dict[str, dict]) -> dict[str, int]:
             stats["filled"] += 1
 
         if not checked:
-            stats["skipped"] += 1
+            # 实测（scripts/probe_tencent.py 打真实响应）确认：个人开发者的
+            # /ws/place/v1/search 返回字段只有 ad_info/address/category/id/location/tel/title/type，
+            # 没有评分、没有营业时间、没有人均。所以这一轮能核的只剩"另一家地图也收录了它"。
+            # 这不是装饰：两源都能按同名+同城检索到，说明不是把同名分店认错了。
+            if t.get("title") and "双源可查" not in p.tags:
+                p.tags = [*p.tags, "双源可查"][:8]
+                p.confidence = min(0.95, (p.confidence or 0.6) + 0.02)
+                stats["exists"] += 1
+            else:
+                stats["skipped"] += 1
     return stats

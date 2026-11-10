@@ -40,3 +40,4 @@ Thumbs.db
 # 运行时状态：本机用量台账与在线学习权重，不属于源码
 data/llm_usage.json
 data/lodging_model.json
+data/tencent_budget.json

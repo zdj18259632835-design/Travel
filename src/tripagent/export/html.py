@@ -56,10 +56,20 @@ def _day_svg(day: DayPlan, width: int = 340, height: int = 150) -> str:
     )
 
 
+def _poem_fields(s) -> tuple[str, str, str]:
+    p = (s.extras or {}).get("poem") or {}
+    lines = "／".join(str(x) for x in (p.get("lines") or []) if str(x).strip())
+    if not lines:
+        return "", "", ""
+    who = f"{p.get('author') or ''}《{p['from']}》" if p.get("from") else (p.get("author") or "")
+    return lines, who, str(p.get("note") or "")
+
+
 def _slot_rows(day: DayPlan) -> list[dict]:
     rows = []
     for s in day.slots:
         poi = s.poi
+        poem, who, note = _poem_fields(s)
         rows.append(
             {
                 "time": s.time_text,
@@ -78,6 +88,9 @@ def _slot_rows(day: DayPlan) -> list[dict]:
                 "why": poi.why if poi else "",
                 "pitfalls": poi.pitfalls if poi else [],
                 "photos": poi.photo_spots if poi else [],
+                "poem": poem,
+                "poem_by": who,
+                "poem_note": note,
                 "notes": s.notes[:3],
             }
         )

@@ -14,6 +14,10 @@
 
 from __future__ import annotations
 
+import json
+import threading
+from datetime import date
+from pathlib import Path
 from typing import Any
 
 from ..knowledge.cities import CityInfo
@@ -36,6 +40,69 @@ def _mark_quota_exhausted(message: str) -> None:
     global _quota_exhausted
     if any(w in message for w in _QUOTA_WORDS):
         _quota_exhausted = True
+
+
+def reset_quota_flag() -> None:
+    """测试与"配额隔日恢复"用：进程内那个开关一旦扳下就没人能松开。"""
+    global _quota_exhausted
+    _quota_exhausted = False
+
+
+class CallBudget:
+    """自己数着次，别等接口告诉你 121。
+
+    个人开发者（未完成企业认证）的腾讯额度是**按接口**给的，量级是个位数到几十次/天。
+    公开部署时如果放任每个访客都发 4 次请求，上午就会把当天的量打光，
+    而且失败请求在控制台上看着像"异常流量"。所以这里把额度显式分成两份：
+      接口告诉我们没额度了（status=121） → 进程内立刻停用；
+      我们自己在一天内计数到上限      → 根本不发请求。
+    计数落盘（不是内存变量）：创空间会重启，多个 worker 也各有进程，
+    内存计数等于没计。
+    """
+
+    def __init__(self, settings) -> None:
+        self.settings = settings
+        self.path: Path = settings.data_dir / "tencent_budget.json"
+
+    def _load(self) -> dict:
+        try:
+            raw = json.loads(self.path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+        return raw if isinstance(raw, dict) else {}
+
+    def _save(self, data: dict) -> None:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.path.with_suffix(".tmp")
+            tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+            tmp.replace(self.path)
+        except OSError:
+            pass  # 记不上账不能把规划搞崩，但内存里的闸门照旧生效
+
+    def used_today(self) -> int:
+        return int(self._load().get(date.today().isoformat(), 0) or 0)
+
+    def limit(self) -> int:
+        """≤0 表示不设自限（只依赖接口回报的 121）。"""
+        return int(self.settings.tencent_daily_calls or 0)
+
+    def remaining(self) -> int:
+        cap = self.limit()
+        if cap <= 0:
+            return 999
+        return max(0, cap - self.used_today())
+
+    def add(self, n: int = 1) -> int:
+        key = date.today().isoformat()
+        with _LOCK:
+            data = {k: v for k, v in self._load().items() if k == key}  # 只留今天
+            data[key] = int(data.get(key, 0) or 0) + n
+            self._save(data)
+            return data[key]
+
+
+_LOCK = threading.Lock()  # gather/advisor 会并发进入这里
 
 # 评分可能出现的字段（不同套餐/类型给的不一样）
 _RATING_KEYS = ("rating", "comment_score", "star", "overall_rating")
@@ -128,10 +195,22 @@ class TencentCrossCheck(Provider):
     def describe(self) -> tuple[bool, str]:
         if not self.settings.tencent_map_key:
             return False, "未配置 TENCENT_MAP_KEY，跳过双源校验"
-        return True, "腾讯位置服务 Web 服务 Key（与高德交叉校验评分/营业时间/人均）"
+        b = self.budget
+        used, cap = b.used_today(), b.limit()
+        left = f"，今日预算已用 {used}/{cap}" if cap > 0 else ""
+        return True, f"腾讯位置服务 Web 服务 Key（与高德交叉校验评分/营业时间/人均）{left}"
+
+    @property
+    def budget(self) -> CallBudget:
+        if getattr(self, "_budget", None) is None:
+            self._budget = CallBudget(self.settings)
+        return self._budget
 
     def _search(self, city: CityInfo, name: str) -> dict:
         def fetch() -> dict:
+            # 计数放在"真的发请求"这一刻，不是"打算查几家"：
+            # 命中缓存的那几次没花你的额度，记了就是虚报。
+            self.budget.add()
             data = _search_raw(self.settings, city, name)
             if data is None:
                 raise ProviderError("腾讯无响应或网络失败")
@@ -162,8 +241,17 @@ class TencentCrossCheck(Provider):
         out: dict[str, dict] = {}
         if _quota_exhausted:
             raise ProviderError("腾讯配额今日已耗尽，本次跳过双源校验")
-        errors: list[str] = []
         todo = [n for n in dict.fromkeys(names) if n and n.strip()][:limit]
+        left = self.budget.remaining()
+        if left <= 0:
+            cap = self.budget.limit()
+            raise ProviderError(
+                f"腾讯调用预算今日已用完（{self.budget.used_today()}/{cap}），跳过双源校验。"
+                f"想多校验把 TRIPAGENT_TENCENT_DAILY_CALLS 调大或等次日恢复。"
+            )
+        if left < len(todo):
+            todo = todo[:left]   # 预算不够就少查几家，而不是让整段校验失败
+        errors: list[str] = []
         for name in todo:
             try:
                 got = self._search(city, name)

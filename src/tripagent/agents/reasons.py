@@ -153,7 +153,8 @@ def personalize(
         if not reason:
             continue
         slot.notes = [f"【{audience_label}】{reason}"] + [x for x in slot.notes if not x.startswith("【")][:2]
-        slot.extras = {"audience_reason": reason, "audience": audience_label}
+        # 合并而不是整块替换：替换会把装配阶段已经挂进去的 extras（如诗词彩蛋）抹掉
+        slot.extras = {**(slot.extras or {}), "audience_reason": reason, "audience": audience_label}
         touched += 1
     note = f"按「{audience_label}」分 {len(groups)} 片并发改写 {touched}/{n} 条推荐语"
     if errors:

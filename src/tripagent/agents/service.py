@@ -198,6 +198,7 @@ class TripService:
         outcome.trace.append(f"真实通勤：{planner.routes_resolved}/{len(plan.all_slots)} 段并发回查")
         self.attach_photos(city, plan, outcome)
         self.crosscheck_pois(city, plan, outcome)
+        self.attach_poems(city, plan, outcome)
         plan.blocking_advice = str(outcome.risk.get("blocking_advice") or "")
         t_val = _time.time()
         plan.scorecard = validator.validate(plan, self.chain, self.settings)
@@ -327,9 +328,27 @@ class TripService:
         stats = reconcile(pois, table)
         outcome.trace.append(
             f"双源校验（腾讯）：{len(table)} 家比对，评分一致 {stats['agree']}、分歧 {stats['conflict']}、"
-            f"补到人均 {stats['filled']}"
+            f"补到人均 {stats['filled']}、另一地图也收录 {stats['exists']}"
         )
         return stats
+
+    # ------------------------------------------------------------------
+    def attach_poems(self, city: CityInfo, plan: TripPlan, outcome: PlanOutcome) -> int:
+        """诗词彩蛋：把本地公版联句按地点挂到时段上（零网络、零 token、约 1 毫秒）。
+
+        刻意不做成"每天一句"：库里成都只有 6 条，硬摊到 12 个时段必然重复，
+        重复的装饰比没有装饰更像机器生成的。挂不上的时段就空着。
+        """
+        from ..core.poetry import attach
+
+        res = self.chain.run("poetry", "lookup", city)
+        entries = res.value or []
+        if not entries:
+            return 0
+        n = attach(plan, entries)
+        if n:
+            outcome.trace.append(f"诗词彩蛋：{n} 个时段挂上本地联句（{city.name} 库内 {len(entries)} 条）")
+        return n
 
     # ------------------------------------------------------------------
     def fetch_weather(self, city: CityInfo, horizon: int = 16) -> tuple[CityWeather, list[str]]:
@@ -471,7 +490,7 @@ class TripService:
         """自检表：能力 / provider / 是否可用 / 说明。CLI 与 UI 都展示它。"""
         rows: list[tuple[str, str, bool, str]] = []
         for capability in ("forecast", "air_quality", "alarm", "poi", "poi_crosscheck",
-                           "images", "transit", "evidence", "guide", "llm"):
+                           "images", "transit", "evidence", "guide", "poetry", "llm"):
             for name, inst in self.chain.providers_for(capability):
                 try:
                     ok, msg = inst.describe()

@@ -481,6 +481,32 @@ def test_reconcile_agrees_conflicts_and_fills_missing_cost():
     assert stats["agree"] == 1 and stats["conflict"] == 2 and stats["filled"] == 1, stats
 
 
+def test_crosscheck_falls_back_to_existence_not_fake_agreement():
+    """个人开发者档的腾讯 search 不给评分/营业时间/人均（真实响应实测确认）。
+
+    这时最危险的写法是"两边都没数据 → 当成一致"，那等于给推荐凭空加分。
+    唯一能核的是"另一家地图也收录了这家店"，加分幅度必须小、措辞必须弱。
+    """
+    from tripagent.core.crosscheck import reconcile
+    from tripagent.models.enums import Category
+    from tripagent.models.poi import POIRecord
+
+    p = POIRecord(id="丁店", name="丁店", category=Category.FOOD, city="成都",
+                  rating=4.2, confidence=0.7)
+    table = {"丁店": {"title": "丁店", "address": "成都市某区某路 8 号",
+                      "rating": None, "open_time": "", "cost": None}}
+    stats = reconcile([p], table)
+    assert stats["exists"] == 1 and stats["agree"] == 0, stats
+    assert "双源可查" in " ".join(p.tags) and "双源评分一致" not in " ".join(p.tags)
+    assert abs(p.confidence - 0.72) < 1e-6, p.confidence
+    assert not p.pitfalls, "没有任何分歧证据，不该写避坑提示"
+
+    # 只有一张地图收录时（腾讯查不到）什么都不加
+    q = POIRecord(id="戊店", name="戊店", category=Category.FOOD, city="成都",
+                  rating=4.2, confidence=0.7)
+    assert reconcile([q], {})["skipped"] == 1 and not q.tags
+
+
 def test_crosscheck_reports_why_when_every_query_failed():
     """全部查询失败必须抛出原因，否则站长以为双源校验在跑，其实早就断了。"""
     import pytest
@@ -491,7 +517,7 @@ def test_crosscheck_reports_why_when_every_query_failed():
     from tripagent.providers import tencent as tc
 
     s = get_settings()
-    s2 = s.model_copy(update={"tencent_map_key": "FAKE-KEY"})
+    s2 = s.model_copy(update={"tencent_map_key": "FAKE-KEY", "tencent_daily_calls": 0})
     prov = tc.TencentCrossCheck(s2, Cache(s2))
     city = get_city("chengdu")
     with pytest.raises(ProviderError, match="全部失败"):
@@ -508,7 +534,7 @@ def test_quota_exhausted_short_circuits_further_calls():
     from tripagent.providers.base import Cache, ProviderError
 
     s = get_settings()
-    s2 = s.model_copy(update={"tencent_map_key": "FAKE-KEY"})
+    s2 = s.model_copy(update={"tencent_map_key": "FAKE-KEY", "tencent_daily_calls": 0})
     prov = tc.TencentCrossCheck(s2, Cache(s2))
     city = get_city("chengdu")
     tc._quota_exhausted = False
@@ -519,3 +545,61 @@ def test_quota_exhausted_short_circuits_further_calls():
     with pytest.raises(ProviderError, match="配额"):
         prov.check(city, ["甲店"])
     tc._quota_exhausted = False
+
+
+def test_tencent_daily_budget_never_hits_the_api_when_exhausted(tmp_path, monkeypatch):
+    """个人开发者的腾讯额度是按接口算的、量级只有几十次/天。
+
+    公开部署必须自己数着次：等接口报 121 才停，当天的量早就被前几个访客打光了。
+    """
+    import pytest
+
+    from tripagent.knowledge.cities import get_city
+    from tripagent.providers import tencent as tc
+    from tripagent.providers.base import Cache, ProviderError
+
+    class S:
+        tencent_map_key = "FAKE"
+        tencent_daily_calls = 3
+        data_dir = tmp_path
+        cache_dir = tmp_path / "cache"
+        cache_ttl_hours = 0.0      # 关掉缓存，保证每次 check 都真的走到计数
+        http_user_agent = "test"
+        online = True
+
+    S.cache_dir.mkdir(parents=True, exist_ok=True)
+    calls: list[str] = []
+
+    def fake_raw(settings, city, name, page_size=5):
+        calls.append(name)
+        return {"status": 0, "data": [{"title": name, "address": "某路"}]}
+
+    monkeypatch.setattr(tc, "_search_raw", fake_raw)
+    monkeypatch.setattr(tc, "_quota_exhausted", False)
+    prov = tc.TencentCrossCheck(S(), Cache(S()))
+    city = get_city("chengdu")
+
+    first = prov.check(city, ["甲店", "乙店"], limit=4)
+    assert len(first) == 2 and len(calls) == 2
+    # 预算只剩 1，请求 4 家 → 只发 1 次，剩下的安静跳过而不是整段失败
+    prov.check(city, ["丙店", "丁店"], limit=4)
+    assert len(calls) == 3, f"预算 3 次已用完，却发了 {len(calls)} 次请求"
+    with pytest.raises(ProviderError, match="预算"):
+        prov.check(city, ["戊店"])
+    assert prov.budget.used_today() == 3
+
+
+def _patched_raw(module, fn):
+    """把模块级的 _search_raw 临时换掉（腾讯接口不能拿测试去真打）。"""
+    import contextlib
+
+    @contextlib.contextmanager
+    def cm():
+        old = module._search_raw
+        module._search_raw = fn
+        try:
+            yield
+        finally:
+            module._search_raw = old
+
+    return cm()

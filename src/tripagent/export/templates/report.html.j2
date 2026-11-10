@@ -35,6 +35,9 @@
   ol.slots li.night { border-left-color:#cda4f0; }
   .stime { font-variant-numeric:tabular-nums; color:var(--accent); font-weight:600; font-size:13px; }
   .why { color:var(--sub); font-size:13px; margin-top:3px; }
+  .poem { margin-top:5px; padding:5px 10px; background:#f1f7f4; border-left:2px solid #94c1ab;
+          font-family:"STZhongsong","SimSun",serif; color:#2b5c4c; font-size:13px; }
+  .poem .m { color:var(--sub); font-size:12px; font-family:inherit; }
   .pit { color:var(--warn); font-size:13px; margin-top:3px; }
   .res { color:var(--danger); font-size:13px; margin-top:3px; }
   svg.route { width:100%; max-width:360px; height:auto; background:#fbfcfd; border:1px dashed var(--line); border-radius:8px; }
@@ -114,6 +117,7 @@
         {% if s.why %}<div class="why">为什么是它：{{ s.why }}</div>{% endif %}
         {% if s.pitfalls %}<div class="pit">避坑：{{ s.pitfalls | join('；') }}</div>{% endif %}
         {% if s.photos %}<div class="why">出机：{{ s.photos | join('；') }}</div>{% endif %}
+        {% if s.poem %}<div class="poem">「{{ s.poem }}」 —— {{ s.poem_by }}{% if s.poem_note %}<div class="m">{{ s.poem_note }}</div>{% endif %}</div>{% endif %}
       </li>
       {% endfor %}
     </ol>

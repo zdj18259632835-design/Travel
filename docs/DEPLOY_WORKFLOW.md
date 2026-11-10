@@ -98,10 +98,12 @@ git checkout main                      # 本地回到开发分支
 
 ```
 密文变量：DASHSCOPE_API_KEY  AMAP_KEY  QWEATHER_KEY  QWEATHER_HOST
+          TENCENT_MAP_KEY      腾讯位置服务 Web 服务 Key（只做双源校验，可留空）
           TRIPAGENT_ACCESS_CODES   体验口令（发给主办方）
           TRIPAGENT_OWNER_CODE     站长口令（只留给自己，无视日额度）
 明文变量（可选，非敏感）：TRIPAGENT_LLM_MODEL=qwen3.6-flash
                           TRIPAGENT_LLM_DAILY_TOKEN_BUDGET=2000000
+                          TRIPAGENT_TENCENT_DAILY_CALLS=40
 ```
 
 程序读的是**环境变量名**，所以两边的名字必须完全一致；改名字等于把密钥弄丢。
@@ -138,6 +140,12 @@ git checkout main                      # 本地回到开发分支
 4. **平台侧额度上限**（只能你去百炼控制台设，代码替代不了）：给这个 Key 设**消费限额与告警**，
    这是唯一能在"程序被绕过"时仍然兜底的硬限制。
 
+腾讯地图不花钱，但**个人开发者档的免费额度是按接口算的、量级只有几十次/天**，
+公开空间里每个访客都要 4 次，一上午就光。所以第五道闸在代码里：
+`TRIPAGENT_TENCENT_DAILY_CALLS`（默认 40）配合 `data/tencent_budget.json` 按天累计，
+预算用完直接跳过双源校验并写进轨迹，不再去撞接口的 `status=121`。
+额度恢复后自动放行；没配 Key 时这层完全不参与，本地开发零打扰。
+
 再加一层平台侧的：魔搭空间设置里有「需要登录」开关，打开后未登录的匿名访客会被平台先拦住，
 与体验口令叠加就是"魔搭账号 + 口令"双因子。
 
@@ -155,6 +163,7 @@ git checkout main                      # 本地回到开发分支
 | 凭据明明对却不生效 | `api_keys/git-credentials` | 文件被写成 CRLF，行尾 `\r` 混进主机名导致永不匹配（必须 `\n`） |
 | 构建失败 | 平台构建日志 | 依赖装不上 / 镜像里 python 版本与 `pyproject` 的 `requires-python` 不符 |
 | 界面显示"今日模型额度已用完" | `data/llm_usage.json` | 闸门生效，属预期；要么等次日，要么调高 `TRIPAGENT_LLM_DAILY_TOKEN_BUDGET` |
+| 腾讯双源校验整轮不生效 | `data/tencent_budget.json`、轨迹里的"双源校验失败（腾讯）" | 个人开发者额度是按接口算的：`status=121` = 当天该接口打光；自闸预算用完则显示"腾讯调用预算今日已用完"。两者都不是代码坏了，次日自动恢复 |
 | 站点天气结论与完整应用不一致 | 两边规则文件 | 只改了一边的阈值 |
 
 **验证顺序永远是：本地 `pytest` → 本地起服务实测 → 推送 → 平台日志 → 公开地址实测。**

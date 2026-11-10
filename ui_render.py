@@ -177,6 +177,28 @@ def _zoom_dialog(urls: list[str], idx: int, title: str, key: str) -> None:
     st.caption(f"{title} · 第 {idx + 1}/{len(urls)} 张 · 高德公开图")
 
 
+def poem_line(s: Slot) -> None:
+    """诗词彩蛋一行：句子 + 作者出处 + 一句"为什么是这句"。
+
+    出处一定要跟着写：只给句子会让人以为是模型现场编的，
+    带上《题目》与作者，用户能在手机上十秒内自己核到。
+    """
+    from html import escape as _e
+
+    p = (s.extras or {}).get("poem") or {}
+    lines = [str(x) for x in (p.get("lines") or []) if str(x).strip()]
+    if not lines:
+        return
+    src = "／".join(lines)
+    who = f"{p.get('author') or ''}《{p['from']}》" if p.get("from") else (p.get("author") or "")
+    note = _e(p.get("note") or "")
+    tail = f'<div class="m">{note}</div>' if note else ""
+    st.markdown(
+        f'<div class="poem"><div class="v">「{_e(src)}」 —— {_e(who)}</div>{tail}</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def slot_block(s: Slot, audience: str, key: str) -> None:
     """一条安排 = 图片 + 徽标 + 理由，全部用原生控件，这样才能挂点击事件。"""
     from html import escape as _e
@@ -194,6 +216,7 @@ def slot_block(s: Slot, audience: str, key: str) -> None:
             st.caption(f"亮点：{s.poi.why[:90]}")
         if s.poi and s.poi.pitfalls:
             st.caption("避坑：" + "；".join(s.poi.pitfalls[:2]))
+        poem_line(s)
 
 
 def day_view(day: DayPlan, audience: str) -> None:

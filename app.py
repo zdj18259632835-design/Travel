@@ -154,7 +154,7 @@ def _render_weather(outcome: PlanOutcome) -> None:
             }
             for f in w.forecast[:horizon]
         ]
-        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
 
 
 def _render_plan(outcome: PlanOutcome) -> None:
@@ -222,7 +222,7 @@ def _render_plan(outcome: PlanOutcome) -> None:
                     }
                     for r in ranking
                 ]),
-                hide_index=True, use_container_width=True,
+                hide_index=True, width="stretch",
             )
             w = getattr(svc_ref, "lodging_weights", [])
             if w:
@@ -259,7 +259,7 @@ def _render_plan(outcome: PlanOutcome) -> None:
             b.append({"分项": "预算", "金额": f"¥{plan.request.budget_yuan:.0f}"})
             over = plan.total_cost_cents > plan.request.budget_cents
             b.append({"分项": "超支" if over else "结余", "金额": f"¥{abs(plan.request.budget_cents - plan.total_cost_cents) / 100:.0f}"})
-        st.dataframe(pd.DataFrame(b), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(b), hide_index=True, width="stretch")
         st.markdown("**行前清单**")
         for item in plan.packing:
             st.markdown(f"- ☐ {item}")
@@ -337,7 +337,7 @@ def tab_plan(svc: TripService, can_run: bool = True) -> None:
         st.caption(f"两次规划之间请等 {cooling} 秒：模型额度是全站点共享的，这条限制防止单个人反复刷。")
     if not can_run:
         st.warning("今日模型额度已用完，联网规划已暂停；「关于」页可看到今日用量，天气速查不受影响。")
-    if st.button("开始规划", type="primary", use_container_width=True,
+    if st.button("开始规划", type="primary", width="stretch",
                  disabled=cooling > 0 or not can_run):
         with st.spinner("正在查天气、抓预警、检索地点、装配行程、逐条校验……"):
             outcome = svc.plan_trip(text)
@@ -403,7 +403,7 @@ def tab_history(svc: TripService) -> None:
     if not rows:
         st.info("还没有保存过行程。生成一次行程会自动落库。")
         return
-    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
     tid = st.selectbox("选择 trip_id", [r["trip_id"] for r in rows])
     plan = store.load(tid)
     if not plan:

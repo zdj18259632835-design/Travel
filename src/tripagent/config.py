@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     amap_secret: str = Field(default="", alias="AMAP_SECRET")
     # 腾讯位置服务 Web 服务 Key：只用于与高德交叉校验评分/营业时间/人均，不做主力数据源
     tencent_map_key: str = Field(default="", alias="TENCENT_MAP_KEY")
+    # 每日腾讯调用预算（全局，跨访客累计）。个人开发者额度是象征性的，
+    # 线上每个访客 4 次会几分钟打光，所以必须自己设闸门，而不是等接口报 121。
+    tencent_daily_calls: int = Field(default=40, alias="TRIPAGENT_TENCENT_DAILY_CALLS")
     qweather_key: str = Field(default="", alias="QWEATHER_KEY")
     qweather_host: str = Field(default="", alias="QWEATHER_HOST")
     # 公网部署时的接口鉴权串；空 = 不鉴权（只允许本机调试）
@@ -102,6 +105,8 @@ class Settings(BaseSettings):
     guide_chain: str = "fixture,qwen_search"
     # 实拍图：高德 POI 图优先（合法、同地点），本地库存过就用，都没有就不显示
     images_chain: str = "amap_search,fixture"
+    # 诗词彩蛋：本地公版联句库优先；none 用来把这一层整个关掉
+    poetry_chain: str = "fixture,none"
     llm_chain: str = "dashscope"
 
     # ---- 行程引擎默认偏好 ----

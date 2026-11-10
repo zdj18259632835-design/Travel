@@ -83,6 +83,13 @@ def to_markdown(plan: TripPlan) -> str:
                 out.append(f"  - 避坑：{'；'.join(s.poi.pitfalls[:3])}")
             if s.poi and s.poi.photo_spots:
                 out.append(f"  - 出片机位：{'；'.join(s.poi.photo_spots[:3])}")
+            poem = (s.extras or {}).get("poem") or {}
+            if poem.get("lines"):
+                who = f"{poem.get('author') or ''}《{poem['from']}》" if poem.get("from") else (poem.get("author") or "")
+                line = "／".join(str(v) for v in poem["lines"] if str(v).strip())
+                out.append(f"  - 这一句：「{line}」—— {who}")
+                if poem.get("note"):
+                    out.append(f"    - {poem['note']}")
             if s.type is SlotType.NIGHTLIFE and s.poi:
                 out.append(f"  - 夜间提示：{'需带身份证' if s.poi.requires_id else ''}"
                            f"{ ' · ' + s.poi.age_policy if s.poi.age_policy else ''}")

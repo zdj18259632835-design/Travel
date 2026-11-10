@@ -398,25 +398,146 @@ AQI ≥ 150 或 PM2.5 ≥ 115  → 风险因子「空气污染」，recommend_in
 > 可迁移的原则：**"没配"可以静默，"配了但坏了"必须留痕。**
 > 前者是正常降级，后者是故障，故障被伪装成降级是最难排查的一类问题。
 
-## 5.6 我没能验证的部分（如实说明）
+## 5.6 这一节先前是"没能验证"，现在有了真 Key，结论却更难听
 
-腾讯 place search 的**评分/营业时间/人均字段名**会随 POI 类型和套餐变化，
-我没有真 Key，所以代码对多个候选字段名做了兼容取值（`rating/comment_score/star` 等）。
-这是"兼容"，不是"验证过"。
+先前我在这里写的是：字段名随套餐变化，代码做了兼容取值，但**没验证过**。
+配上真实 Key、跑过 `scripts/probe_tencent.py` 之后，验证结果如下。
 
-因此配好 Key 后请先跑一次探针，它会打印原始字段名与解析结果：
+**结论一：不是 Key 的问题，是个人与企业开发者的额度差异。**
+同一把 Key，六个接口逐个打一次，实测：
 
 ```
-.venv\Scripts\python.exe scripts\probe_tencent.py 成都 大龙燚火锅
+Place 搜索     status=121  此key每日调用量已达到上限
+Place 提示     status=0    命中=10          ← 成功一次
+地理编码       status=0    Success          ← 成功一次
+逆地理编码     status=121
+Place 详情     status=121
+IP 定位        status=0
 ```
 
-看到 `provider 解析结果` 那行有 rating/营业时间，才算真的接上了；
-如果原始返回里有评分字段但我们没取到，把字段名补进 `_RATING_KEYS` 即可（一处改完）。
+`121` 的意思是"这个**接口**今天的量用完了"，而不是"你的账号没额度了"。
+未企业认证的开发者在每个接口上分到的日常量是象征性的（个位数到几十次），
+所以控制台看着"还有免费额度"和"这个接口还能调"确实是两件可以同时成立的事。
 
-代码位置：[providers/tencent.py](../src/tripagent/providers/tencent.py)、
-[core/crosscheck.py](../src/tripagent/core/crosscheck.py)、
-[scripts/probe_tencent.py](../scripts/probe_tencent.py)
-测试：`test_pick_best_matches_names_regardless_of_bracket_style`、
-`test_time_conflict_needs_both_sides_parseable`、
-`test_reconcile_agrees_conflicts_and_fills_missing_cost`、
-`test_crosscheck_reports_why_when_every_query_failed`
+**结论二：`/ws/place/v1/search` 返回的字段只有这些**
+
+```
+ad_info, address, category, id, location, tel, title, type
+```
+
+没有评分、没有营业时间、没有人均。也就是说，第五部分设计的"交叉校验评分/营业时间"
+在当前套餐下**没有可比对的字段**——这不是取字段名的代码写错了，是数据本身不在响应里。
+
+**因此改了两处，而不是删掉第二个地图源**（用户明确说过"先不要放弃第二个地图源"）：
+
+1. `crosscheck.reconcile()` 增加 `exists` 一档：只剩"另一家地图也收录了这家店"这个信号时，
+   打一个 `双源可查` 标签、置信度只加 **0.02**。
+   原来这里最容易犯的错是把"两边都没有数据"当成"两边一致"从而加分——
+   那是给推荐发不存在的奖章，测试专门盯住了它：
+   `test_crosscheck_falls_back_to_existence_not_fake_agreement`；
+2. `providers/tencent.py` 增加**自己数着的预算**（下一节）。
+
+> 可迁移的原则：**接口报错的文案（"每日调用量已达到上限"）里就写着答案**，
+> 但它只在请求真的发出去之后才出现。配额这种东西必须在客户端自己记账，
+> 等服务器告诉你已经晚了——当天的量已经花完了。
+
+---
+
+# 第六部分　配额闸门与诗词彩蛋
+
+## 6.1 自闸门：`CallBudget`，落盘的按天计数器
+
+设计上有四个决定，每一个都对应一个具体的失败方式：
+
+| 决定 | 不这么做会怎样 |
+| --- | --- |
+| 计数**写文件**（`data/tencent_budget.json`），不用内存变量 | 创空间会重启、多个 worker 各有进程，内存计数等于没计；一天 40 次会变成"每个进程 40 次" |
+| 只计**真的发出去的请求**，命中缓存的不计 | 按"打算查几家"计会虚报，看着预算还有很多其实都在打接口，反之看着打光了其实都在读缓存 |
+| 预算不足以查完 4 家时**少查几家**，不是整段失败 | 全部跳过的话，用户这条行程一点校验信号都没有；查 1 家也是查 |
+| 预算用完抛 `ProviderError`，由上层写进轨迹 | 静默跳过会让我以为双源校验在跑（第五部分刚踩过这个洞） |
+
+```python
+left = self.budget.remaining()
+if left <= 0:
+    raise ProviderError(f"腾讯调用预算今日已用完（{used}/{cap}），跳过双源校验…")
+if left < len(todo):
+    todo = todo[:left]        # 预算不够就少查几家，而不是让整段校验失败
+```
+
+`TRIPAGENT_TENCENT_DAILY_CALLS=0` 表示**不由我们设限**，只听接口的 `121`；
+这时自闸门退化成观察记录，本地调试想看真实行为就用这一档。
+测试：`test_tencent_daily_budget_never_hits_the_api_when_exhausted`
+（它把 `_search_raw` 换成假函数数请求次数——配额类逻辑绝不能拿真实接口去测）。
+
+## 6.2 诗词彩蛋：为什么不"联网搜古诗"
+
+这个功能最容易的做法是让大模型"给这个景点配一句诗"。实测过思路后否掉了，三个理由：
+
+1. **它会张冠李戴。** 模型背诗的方式是"句子 + 作者"两个独立分布，
+   拼起来时对不上是常态（"春风不度玉门关"被记成别的题目就是典型）。
+   而这类错误我们**无法自动核对**，用户更看不出来。
+2. **它要时间。** 一次规划已经调了五六次模型，再加一次就是白等十几秒。
+3. **它没必要。** 公版诗是静态知识，不需要"最新"。静态知识配静态数据，
+   毫秒级、离线可用、可复现——和 `evidence_chain` 已经采用的"先本地后联网"是同一条判断。
+
+将来真要接古诗文接口，注册一个 `@provider("poetry", "gushiwen")` 并把
+`poetry_chain` 改成 `gushiwen,fixture,none` 就行，`core/poetry.py` 与界面一行不用动。
+
+## 6.3 匹配规则的三条硬约束
+
+数据形状决定了规则必须怎么写。库里每条是：
+
+```json
+{"match": ["爱晚", "岳麓"], "lines": ["停车坐爱枫林晚，霜叶红于二月花"],
+ "author": "杜牧", "from": "山行", "note": "爱晚亭的亭名，就取自这一句。"}
+```
+
+1. `match` 非空 → 精确命中，得 3 分；`match: []` → 城市兜底句，得 1 分。
+   所以"寒山寺"一定拿到《枫桥夜泊》，不会被苏州那句泛写水巷的抢走。
+2. **一句诗在一趟行程里只出现一次**，用完留空。
+   这条完全是被天气那句反馈教出来的：如果每个时段都摊一句"晓看红湿处，花重锦官城"，
+   观感比没有彩蛋更差，因为一眼就是模板。
+   （第一版实现允许"轮完一圈重开"，跑出来 9 个时段里 7 个都是同一句——
+   是 `test_no_line_repeats_inside_one_trip` 把它按住的。）
+3. 库里没有这个城市 → 整趟都没有诗。哈尔滨、深圳、丽江就是空的。
+
+`SKIP_TYPES` 把交通移动、入住退房、休息缓冲排除在外：正在坐高铁的时候冒出一句诗很可笑。
+
+## 6.4 顺手抓到的一个真 bug：`extras` 被整块覆盖
+
+写完全流程跑一遍，成都 3 天只挂上 1 句，而轨迹说挂了 3 句。
+差在哪？`agents/reasons.py` 里这句：
+
+```python
+slot.extras = {"audience_reason": reason, "audience": audience_label}   # 错
+slot.extras = {**(slot.extras or {}), "audience_reason": reason, ...}   # 对
+```
+
+装配阶段挂进去的 `poem` 就这样被推荐语那一步抹掉了。
+这是"共享可变字典"的经典事故：谁最后写谁赢，而且**不报错**。
+回归测试：`test_reason_rewrite_does_not_erase_the_poem`——
+它构造一个假 chain 让推荐语真的走一遍写入，然后同时断言两个键都还在。
+
+## 6.5 版权这条线为什么画在"公版"
+
+库里只收唐宋及以前的作品。看起来"多收几首现代的更好看"，
+但作者去世后 50 年才进入公版，近现代作品（含毛泽东诗词、郭沫若）在公开部署里
+是有实际法律风险的，而比赛要求作品公开可访问。
+这条判断被写成了测试：`test_only_public_domain_authors` 直接列出禁收名单，
+以后谁（包括我）手滑加一首现代的，`pytest` 就会拦住。
+
+同一份自检还要求每条都有作者、出处、`note`（为什么是这句）——
+少任何一项，界面上那句话就像模型编的。
+
+## 6.6 加一个城市要付多少成本
+
+1. 打开 `data/fixtures/poetry.json`，在 `cities` 下加一个中文城市名（不带"市"）；
+2. 写 2-6 条，其中**最多一条**是 `match: []` 的兜底句（测试会数这个）；
+3. 如果它属于某个地级市下辖的县（常熟属苏州、奉节属重庆），在 `aliases` 里指过去；
+4. 跑 `pytest tests/test_poetry.py` —— 字段完整性、别名指向、重复句子一次全查。
+
+代码位置：[data/fixtures/poetry.json](../data/fixtures/poetry.json)、
+[core/poetry.py](../src/tripagent/core/poetry.py)、
+[providers/poetry.py](../src/tripagent/providers/poetry.py)、
+[ui_render.py 的 `poem_line`](../ui_render.py)
+测试：`tests/test_poetry.py`（13 个）、`test_poem_line_renders_in_real_app`
