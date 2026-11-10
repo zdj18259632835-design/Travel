@@ -43,6 +43,8 @@ class Settings(BaseSettings):
     dashscope_api_key: str = Field(default="", alias="DASHSCOPE_API_KEY")
     amap_key: str = Field(default="", alias="AMAP_KEY")
     amap_secret: str = Field(default="", alias="AMAP_SECRET")
+    # 腾讯位置服务 Web 服务 Key：只用于与高德交叉校验评分/营业时间/人均，不做主力数据源
+    tencent_map_key: str = Field(default="", alias="TENCENT_MAP_KEY")
     qweather_key: str = Field(default="", alias="QWEATHER_KEY")
     qweather_host: str = Field(default="", alias="QWEATHER_HOST")
     # 公网部署时的接口鉴权串；空 = 不鉴权（只允许本机调试）
@@ -85,6 +87,8 @@ class Settings(BaseSettings):
     air_quality_chain: str = "open_meteo,fixture"
     alarm_chain: str = "qweather,cma_alarm,nmc_alarm,fixture"
     poi_chain: str = "amap,fixture"
+    # 双源校验：没配腾讯 Key 时走 none，上层会明确知道"这次没校验"，而不是假装校验过
+    poi_crosscheck_chain: str = "tencent,none"
     transit_chain: str = "amap,estimated"
     # 城市解析：先查内建表（免费、离线可用），查不到再用高德地理编码扩展到全国任意县市
     city_chain: str = "static,amap"

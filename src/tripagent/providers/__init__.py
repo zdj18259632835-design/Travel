@@ -10,6 +10,7 @@ from . import images as _images  # noqa: F401
 from . import llm as _llm  # noqa: F401
 from . import lodging as _lodging  # noqa: F401
 from . import poi as _poi  # noqa: F401
+from . import tencent as _tencent  # noqa: F401
 from . import transit as _transit  # noqa: F401
 from . import weather as _weather  # noqa: F401
 from .base import Attempt, Cache, Chain, ChainResult, Provider, ProviderError, provider, registry_snapshot

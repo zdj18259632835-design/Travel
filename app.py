@@ -442,6 +442,10 @@ def tab_about(svc: TripService) -> None:
     c2.caption(f"高德地图：{'已配置' if s.amap_key else '未配置'}")
     c3.caption(f"和风天气：{'已配置' if (s.qweather_key and s.qweather_host) else ('缺 Host' if s.qweather_key else '未配置')}")
     c4.caption(f"模型：{s.llm_model}")
+    st.caption(
+        f"腾讯双源校验：{'已配置' if s.tencent_map_key else '未配置（评分与营业时间只用高德单源）'}"
+        + (f" · 日额度 {s.llm_daily_token_budget:,} tokens" if s.llm_daily_token_budget else "")
+    )
     from tripagent.providers.usage import UsageLedger
 
     led = UsageLedger(s.usage_path)

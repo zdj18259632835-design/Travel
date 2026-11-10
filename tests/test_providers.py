@@ -433,3 +433,66 @@ def test_air_quality_never_invents_days_beyond_the_api_limit():
 
     s = get_settings()
     assert len(FixtureAir(s, Cache(s)).fetch_air(get_city("chengdu"), 30)) == 7
+
+
+# ---------------------------------------------------------------- 双源交叉校验
+def test_pick_best_matches_names_regardless_of_bracket_style():
+    from tripagent.providers.tencent import pick_best
+
+    rows = [{"title": "大龙燚火锅(玉林店)"}, {"title": "大龙燚火锅(春熙店)"}]
+    got = pick_best(rows, "大龙燚火锅（玉林店）")
+    assert got and got["title"].endswith("玉林店)"), got
+
+
+def test_time_conflict_needs_both_sides_parseable():
+    from tripagent.core.crosscheck import _time_conflict as tc
+
+    assert tc("09:00-17:00", "10:00-18:00")          # 差 60 分钟以上才算冲突
+    assert not tc("09:00-17:00", "09:30-17:00")
+    assert not tc("09:00-17:00", "全天开放")          # 解析不出来不等于内容不一致
+    assert not tc("", "09:00-17:00")
+
+
+def test_reconcile_agrees_conflicts_and_fills_missing_cost():
+    from tripagent.core.crosscheck import reconcile
+    from tripagent.models.enums import Category
+    from tripagent.models.poi import POIRecord
+
+    def poi(name, rating=None, cost=None, hours=""):
+        return POIRecord(id=name, name=name, category=Category.FOOD, city="成都",
+                         rating=rating, avg_cost_cents=cost, open_hours_raw=hours, confidence=0.7)
+
+    agree = poi("甲店", rating=4.5)
+    conflict = poi("乙店", rating=4.6, hours="09:00-17:00")
+    missing = poi("丙店", rating=4.0, cost=None)
+    table = {
+        "甲店": {"title": "甲店", "rating": 4.4, "open_time": "", "cost": None},
+        "乙店": {"title": "乙店", "rating": 3.8, "open_time": "11:00-21:00", "cost": None},
+        "丙店": {"title": "丙店", "rating": None, "open_time": "", "cost": 88.0},
+    }
+    stats = reconcile([agree, conflict, missing], table)
+
+    assert agree.confidence > 0.7 and "双源评分一致" in " ".join(agree.tags)
+    assert conflict.confidence < 0.7
+    assert any("评分两源不一致" in p for p in conflict.pitfalls), conflict.pitfalls
+    assert any("营业时间两源不一致" in p for p in conflict.pitfalls), conflict.pitfalls
+    assert missing.avg_cost_cents == 8800 and missing.raw.get("cost_source") == "tencent"
+    # 乙店同时踩中"评分分歧"和"营业时间分歧"两条，所以 conflict 是 2 而不是 1
+    assert stats["agree"] == 1 and stats["conflict"] == 2 and stats["filled"] == 1, stats
+
+
+def test_crosscheck_reports_why_when_every_query_failed():
+    """全部查询失败必须抛出原因，否则站长以为双源校验在跑，其实早就断了。"""
+    import pytest
+
+    from tripagent.config import get_settings
+    from tripagent.knowledge.cities import get_city
+    from tripagent.providers.base import Cache, ProviderError
+    from tripagent.providers import tencent as tc
+
+    s = get_settings()
+    s2 = s.model_copy(update={"tencent_map_key": "FAKE-KEY"})
+    prov = tc.TencentCrossCheck(s2, Cache(s2))
+    city = get_city("chengdu")
+    with pytest.raises(ProviderError, match="全部失败"):
+        prov.check(city, ["不存在的店名甲", "不存在的店名乙"])

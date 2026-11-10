@@ -197,6 +197,7 @@ class TripService:
         outcome.timings["·装配"] = round(_time.time() - t_asm, 1)
         outcome.trace.append(f"真实通勤：{planner.routes_resolved}/{len(plan.all_slots)} 段并发回查")
         self.attach_photos(city, plan, outcome)
+        self.crosscheck_pois(city, plan, outcome)
         plan.blocking_advice = str(outcome.risk.get("blocking_advice") or "")
         t_val = _time.time()
         plan.scorecard = validator.validate(plan, self.chain, self.settings)
@@ -299,6 +300,36 @@ class TripService:
         if touched:
             outcome.trace.append(f"图片质检：{touched} 个地点共淘汰 {dropped} 张糊图/小图")
         return filled
+
+    # ------------------------------------------------------------------
+    def crosscheck_pois(self, city: CityInfo, plan: TripPlan, outcome: PlanOutcome) -> dict:
+        """用腾讯位置服务交叉校验已排进行程的地点（没配 Key 时整步跳过）。
+
+        只校验真正会显示出来的前 8 家：腾讯个人版配额与并发都有限，
+        为看不见的候选花钱买数据没有意义。
+        """
+        from ..core.crosscheck import reconcile
+
+        pois = [s.poi for s in plan.all_slots if s.poi and s.type.label not in ("入住退房", "交通移动")]
+        if not pois:
+            return {}
+        res = self.chain.run("poi_crosscheck", "check", city, [p.name for p in pois][:8])
+        table = res.value or {}
+        if not table:
+            # 配了 Key 却一条都没校验上（Key 错、配额用尽、字段变了）必须留痕：
+            # 静默跳过会让站长以为双源校验在跑，实际早就断了
+            failed = [a for a in res.attempts if a.provider == "tencent" and not a.ok]
+            if failed:
+                outcome.trace.append(f"双源校验失败（腾讯）：{failed[0].error[:120]}")
+            elif res.source == "tencent":
+                outcome.trace.append("双源校验：腾讯没查到对应地点，本次未做交叉校验")
+            return {}
+        stats = reconcile(pois, table)
+        outcome.trace.append(
+            f"双源校验（腾讯）：{len(table)} 家比对，评分一致 {stats['agree']}、分歧 {stats['conflict']}、"
+            f"补到人均 {stats['filled']}"
+        )
+        return stats
 
     # ------------------------------------------------------------------
     def fetch_weather(self, city: CityInfo, horizon: int = 16) -> tuple[CityWeather, list[str]]:
@@ -439,7 +470,8 @@ class TripService:
     def doctor(self) -> list[tuple[str, str, bool, str]]:
         """自检表：能力 / provider / 是否可用 / 说明。CLI 与 UI 都展示它。"""
         rows: list[tuple[str, str, bool, str]] = []
-        for capability in ("forecast", "alarm", "poi", "transit", "evidence", "guide", "llm"):
+        for capability in ("forecast", "air_quality", "alarm", "poi", "poi_crosscheck",
+                           "images", "transit", "evidence", "guide", "llm"):
             for name, inst in self.chain.providers_for(capability):
                 try:
                     ok, msg = inst.describe()
