@@ -151,7 +151,7 @@ def photo_gallery(poi, key: str) -> None:
     state_key = f"gal:{key}"
     idx = min(max(0, int(st.session_state.get(state_key, 0))), len(urls) - 1)
     st.image(urls[idx], width="stretch", clamp=True,
-             caption=f"{poi.name} · 高德公开图（第 {idx + 1}/{len(urls)} 张）")
+             caption=f"{poi.name}（第 {idx + 1}/{len(urls)} 张）")
     c1, c2, c3 = st.columns([1, 1, 7])
     if c1.button("◀", key=f"prev:{key}", disabled=idx <= 0, help="上一张"):
         st.session_state[state_key] = idx - 1
@@ -174,7 +174,7 @@ def _zoom_dialog(urls: list[str], idx: int, title: str, key: str) -> None:
     if c2.button("下一张 ▶", key=f"zn:{key}:{idx}", disabled=idx >= len(urls) - 1):
         st.session_state[f"gal:{key}"] = idx + 1
         _zoom_dialog(urls, idx + 1, title, key)
-    st.caption(f"{title} · 第 {idx + 1}/{len(urls)} 张 · 高德公开图")
+    st.caption(f"{title} · 第 {idx + 1}/{len(urls)} 张")
 
 
 def poem_line(s: Slot) -> None:
@@ -211,11 +211,19 @@ def slot_block(s: Slot, audience: str, key: str) -> None:
         if badges:
             head += f" 　{badges}"
         st.markdown(head)
-        st.markdown(f"为什么这个时段去：{_e(slot_reason(s, audience))}")
+        # 正文改成带类名的 HTML 行：Streamlit 默认正文 14px、颜色偏灰，
+        # 用户反馈"字小、不醒目"，这里统一提到 15.5px 近黑（样式在 ui_theme 的 .slotline）。
+        st.markdown(
+            f'<div class="slotline">为什么这个时段去：{_e(slot_reason(s, audience))}</div>',
+            unsafe_allow_html=True,
+        )
         if s.poi and s.poi.why and not (s.extras or {}).get("audience_reason"):
-            st.caption(f"亮点：{s.poi.why[:90]}")
+            st.markdown(f'<div class="metaline">亮点：{_e(s.poi.why[:90])}</div>', unsafe_allow_html=True)
         if s.poi and s.poi.pitfalls:
-            st.caption("避坑：" + "；".join(s.poi.pitfalls[:2]))
+            st.markdown(
+                f'<div class="pitline">避坑：{_e("；".join(s.poi.pitfalls[:2]))}</div>',
+                unsafe_allow_html=True,
+            )
         poem_line(s)
 
 

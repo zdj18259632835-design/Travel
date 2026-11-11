@@ -29,6 +29,8 @@ output/
 
 # 编辑器/系统
 # .vscode 里是运行与调试配置，属于项目的一部分，要提交
+# .vs 是 Visual Studio 打开文件夹时的本地缓存（sqlite 索引），不属于源码
+.vs/
 .idea/
 .DS_Store
 Thumbs.db

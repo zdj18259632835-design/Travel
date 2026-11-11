@@ -81,6 +81,8 @@ class Settings(BaseSettings):
     image_min_edge: int = Field(default=420, alias="TRIPAGENT_IMAGE_MIN_EDGE")
     # 拉普拉斯方差下限：清晰度指标，越小越糊（失焦/重压缩会掉到个位数）
     image_min_lapvar: float = Field(default=11.0, alias="TRIPAGENT_IMAGE_MIN_LAPVAR")
+    # 内容信号（灰白/天空植被/色彩丰富度）只用于排序，不设删除阈值：
+    # 358 张真实图扫描下来，用它删图的误杀率高于收益，见 providers/images.filter_poi_photos
     http_user_agent: str = "Mozilla/5.0 (compatible; TripAgent/0.1; +https://local.demo)"
 
     # ---- 数据源降级链（越靠前优先级越高，失败/为空则落到下一个）----

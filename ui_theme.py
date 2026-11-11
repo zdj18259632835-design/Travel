@@ -112,6 +112,29 @@ hr { border-color: rgba(61,107,90,.18); }
 .slot .tag.n { background: rgba(123,94,167,.14); color: #6b4f96; }
 .slot .tag.res { background: rgba(180,85,47,.14); color: #9a4526; }
 
+/* ---------- 实拍图窗口：统一画幅，不裁切，超出部分留白 ---------- */
+/* 通行做法（blueimp Gallery / PhotoSwipe / baguetteBox 的 CSS 原文都是这一套）：
+   图片本身保持固有比例（width:auto;height:auto），只给它一个视口百分比的上限，
+   再加 max-width:100% 兜住横向溢出，最后居中。
+   这样 4:3、竖构图、超宽全景都占同样的高度上限，谁也不会把整屏撑跑。
+   注意不能用 object-fit:cover——那正是"广州艺术博物院看不到全貌"的原因。 */
+[data-testid="stImage"] img {
+    width: auto !important; height: auto !important;
+    max-width: 100%; max-height: 46vh;
+    margin: 0 auto; display: block;
+    border-radius: 10px;
+}
+[data-testid="stImageContainer"] { text-align: center; }
+[data-testid="stImageCaption"] { font-size: .78rem; color: #6b7d76; }
+/* 弹层里的原图可以更大，但仍不裁切 */
+[data-testid="stDialog"] [data-testid="stImage"] img { max-height: 76vh; }
+
+/* ---------- 行程条目的文字：用户反馈"字小、颜色不醒目" ---------- */
+.slotline { color: #12201A; font-size: 15.5px; line-height: 1.62; margin: 2px 0 0; }
+.slotline b { color: #12201A; }
+.pitline { color: #9a4526; font-size: 14px; line-height: 1.55; margin: 6px 0 0; }
+.metaline { color: #45584F; font-size: 14px; line-height: 1.55; margin: 4px 0 0; }
+
 /* ---------- 诗词彩蛋（本地公版库，与"青绿"主色同系，不与避坑条抢注意力）---------- */
 .poem {
     margin: 7px 0 0; padding: 6px 11px; border-radius: 8px;

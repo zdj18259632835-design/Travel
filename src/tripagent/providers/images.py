@@ -44,6 +44,55 @@ def name_match(query: str, candidate: str) -> bool:
     return n >= 4 and a[: min(4, n)] == b[: min(4, n)]
 
 
+# ---------------------------------------------------------------------------
+# 第一道闸：这条 POI 到底是不是我们要拍照的那个东西
+# ---------------------------------------------------------------------------
+# 高德一次给 8 条候选，里面混着「宝塔山景区地下停车场」「游客中心」「枣园宾馆」。
+# 老代码用"名字互相包含"匹配，而「宝塔山景区」确实包含在「宝塔山景区地下停车场」里，
+# 于是停车场的照片进了景区相册；更糟的是车身边缘锐利、拉普拉斯方差比风景照还高，
+# 排序反而把它们顶到第一张。用户看到的"就给我看几辆白车"是这么来的。
+#
+# 高德 typecode 前两位是稳定大类（scripts/probe_image_types.py 实测确认）：
+#   11 风景名胜 / 08 体育休闲（酒吧 KTV 密室）/ 14 科教文化（剧院 博物馆）
+#   05 餐饮 / 06 购物（特色街区 夜市）/ 19 地名地址（山体 水域，风景照常挂这里）
+TYPE_ALLOW = {"11", "08", "14", "05", "06", "19"}
+# 明确排除：停车场、政府机关、住宿（活动卡片里放酒店大堂照很怪）、汽车服务、医院、银行
+TYPE_BLOCK = {"01", "02", "03", "04", "07", "09", "10", "12", "13", "15", "16", "17", "18"}
+
+
+def typecode_ok(row: dict) -> bool:
+    """POI 类型是否适合作为"文化娱乐展示图"的来源。
+
+    多类型（`110210|110204`）只要有一个落在允许大类里就算通过。
+    拿不到 typecode 时不判死刑——老接口与小 POI 经常缺字段，误杀比漏杀贵。
+    """
+    codes = str(row.get("typecode") or "").split("|")
+    seen = [c.strip()[:2] for c in codes if c and c.strip()]
+    if not seen:
+        return True
+    if any(c in TYPE_ALLOW for c in seen):
+        return True
+    return not any(c in TYPE_BLOCK for c in seen)
+
+
+def match_rank(query: str, candidate: str) -> int:
+    """同名程度：3 完全同名，2 候选以查询开头，1 互相包含，0 不算同一个地方。
+
+    排序时先按这个再按清晰度，"宝塔山景区"就不会被"宝塔山景区地下停车场"抢走封面。
+    """
+    a, b = _norm(query), _norm(candidate)
+    if not a or not b:
+        return 0
+    if a == b:
+        return 3
+    if b.startswith(a) or a.startswith(b):
+        return 2
+    if a in b or b in a:
+        return 1
+    n = min(len(a), len(b))
+    return 1 if n >= 4 and a[:4] == b[:4] else 0
+
+
 def keep_alive(urls: list[str], timeout: float = 3.0) -> list[str]:
     """并发 HEAD 探活，只丢掉明确拿不到的（4xx/5xx）。
 
@@ -95,14 +144,61 @@ def sharpness(data: bytes) -> tuple[int, int, float]:
     return w, h, float(lap.var())
 
 
-def score_url(url: str, timeout: float = 6.0) -> tuple[int, int, float] | None:
-    """下载并打分；拿不到字节时返回 None（调用方按"未知"处理，不误杀）。"""
+def scene_signals(data: bytes) -> dict:
+    """内容信号：清晰度之外，这张图"像不像一张值得看的图"。
+
+    为什么需要它：拉普拉斯方差只看对焦，停车场的白车边缘锐利，方差比阴天的风景照还高。
+    这里补三条同样可复现的指标，全部 numpy + Pillow，不引入 OpenCV/torch：
+
+      gray    低饱和亮灰占比（车身、水泥地、玻璃幕墙的共同特征）；
+      skyveg  天空蓝与植被绿里较大的那个（真风景照几乎必有一个）；
+      color   Hasler & Süsstrunk 的色彩丰富度（rg/yb 双通道标准差 + 均值惩罚项）。
+
+    实测分布（scripts/probe_image_types.py，按高德 typecode 分组，n=110）：
+      风景名胜 灰白中位 0.096　生活服务 0.273　住宿 0.585
+      风景名胜 天空或植被中位 0.311　生活服务 0.104
+    所以这两条**只用于排序与极端淘汰**，不能当主判据——阴天、夜景会让它们大幅漂移。
+    """
+    import io
+
+    import numpy as np
+    from PIL import Image
+
+    im = Image.open(io.BytesIO(data)).convert("RGB")
+    w, h = im.size
+    im.thumbnail((160, 160))
+    a = np.asarray(im, dtype=np.float32) / 255.0
+    hsv = np.asarray(im.convert("HSV"), dtype=np.float32) / 255.0
+    hue, sat, val = hsv[..., 0], hsv[..., 1], hsv[..., 2]
+
+    gray = float(((sat < 0.10) & (val > 0.55)).mean())
+    # 天空必须有饱和度：白墙、白车、云层的饱和度和真天空差一个量级。
+    # 第一版这里只卡了 hue 与亮度，结果合成的一张水泥地图 skyveg=1.0，判据当场失效——
+    # 这类"看起来合理但被反例打穿"的阈值，只有拿最讨厌的样本去量才看得出来。
+    sky = float(((hue > 0.52) & (hue < 0.75) & (sat >= 0.15) & (sat < 0.65) & (val > 0.55)).mean())
+    veg = float(((hue > 0.18) & (hue < 0.46) & (sat > 0.22) & (val > 0.12)).mean())
+    rg = a[..., 0] - a[..., 1]
+    yb = 0.5 * (a[..., 0] + a[..., 1]) - a[..., 2]
+    color = float(
+        np.sqrt(rg.var() + yb.var()) + 0.3 * np.sqrt(rg.mean() ** 2 + yb.mean() ** 2)
+    )
+    return {"w": w, "h": h, "gray": round(gray, 4), "skyveg": round(max(sky, veg), 4),
+            "color": round(color, 4)}
+
+
+def score_url(url: str, timeout: float = 6.0) -> list | None:
+    """下载并打分：[宽, 高, 拉普拉斯方差, 灰白占比, 天空或植被, 色彩丰富度]。
+
+    拿不到字节时返回 None（调用方按"未知"处理，不误杀）。
+    """
     try:
         r = httpx.get(url, timeout=timeout, follow_redirects=True,
                       headers={"User-Agent": "Mozilla/5.0 (compatible; TripAgent/0.1)"})
         if r.status_code >= 400 or not r.content:
             return None
-        return sharpness(r.content)
+        w, h, lap = sharpness(r.content)
+        sig = scene_signals(r.content)
+        return [w, h, lap, sig["gray"], sig["skyveg"], sig["color"]]
     except Exception:
         return None
 
@@ -123,7 +219,7 @@ class AMapImages(Provider):
             "keywords": name,
             "region": city.adcode or city.name,
             "citylimit": "true",
-            "page_size": 6,
+            "page_size": 8,
             "page_num": 1,
             "show_fields": "photos",
         }
@@ -134,10 +230,13 @@ class AMapImages(Provider):
                 raise ProviderError("高德无响应")
             if str(data.get("status")) != "1":
                 raise ProviderError(f"高德返回 {data.get('info')}({data.get('infocode')})")
+            rows = [r for r in (data.get("pois") or []) if isinstance(r, dict)]
+            # 先过类型，再按同名程度排序：停车场/游客中心/宾馆在第一刀就被挡掉
+            cand = [(match_rank(name, str(r.get("name") or "")), typecode_ok(r), r) for r in rows]
+            cand = [c for c in cand if c[0] > 0 and c[1]]
+            cand.sort(key=lambda x: -x[0])
             urls: list[str] = []
-            rows = data.get("pois") or []
-            hits = [r for r in rows if isinstance(r, dict) and name_match(name, str(r.get("name") or ""))]
-            for row in (hits or rows)[:3]:
+            for rank, _ok, row in cand[:3]:
                 urls.extend(amap_photos(row, limit=per))
             return keep_alive(list(dict.fromkeys(urls))[:per])
 
@@ -161,7 +260,10 @@ class AMapImages(Provider):
 
 
     def quality(self, urls: list[str]) -> dict[str, list]:
-        """批量打分：url -> [宽, 高, 拉普拉斯方差]。分数落盘缓存，同图全站只下一次。"""
+        """批量打分：url -> [宽, 高, 方差, 灰白, 天空或植被, 色彩]。分数落盘缓存，同图全站只下一次。
+
+        缓存键从 imgq 换成 imgq2：打分维度加了，旧记录只有前三项，混用会被当成"没有内容信号"。
+        """
         todo = [u for u in dict.fromkeys(urls) if u]
         if not todo:
             return {}
@@ -171,7 +273,7 @@ class AMapImages(Provider):
                 got = score_url(u)
                 return list(got) if got else []
             try:
-                return self.cached_call(("imgq", u), fetch) or []
+                return self.cached_call(("imgq2", u), fetch) or []
             except Exception:
                 return []
 
@@ -210,14 +312,26 @@ class FixtureImages(Provider):
         return out
 
 
+def content_rank(w: float, h: float, lap: float, gray: float, skyveg: float, color: float) -> float:
+    """把"清楚"和"值得看"合成一个排序分。数值来自实测分布，不是随手拍的权重。"""
+    import math
+
+    return math.log(lap + 1.0) * 6.0 + skyveg * 40.0 + color * 1.5 - gray * 50.0
+
+
 def filter_poi_photos(chain: Chain, settings, pois, per_poi: int = 4) -> tuple[int, int]:
-    """给一批 POI 筛掉糊图与小图，并把最清晰的一张排到最前。
+    """给一批 POI 筛掉糊图与小图，并把"最该看的一张"排到最前。
 
     返回 (淘汰张数, 受影响地点数)。
 
-    判据是两条硬事实，不是审美：
-      短边 < image_min_edge      → 放大到卡片宽度必然发糊，丢；
-      拉普拉斯方差 < image_min_lapvar → 梯度被抹平（失焦或压缩糊），丢。
+    **删除只依据硬事实**：短边 < image_min_edge（放大必糊）、
+    拉普拉斯方差 < image_min_lapvar（梯度被抹平）。
+    内容信号（灰白占比、天空/植被、色彩丰富度）**只参与排序，不参与删除**——
+    这不是保守，是量出来的：scripts/probe_image_types.py 在 358 张真实图上扫描阈值，
+    灰白线取 0.40 时误杀 7/204 张真景点图，却只多拦住 6/106 张无聊图。
+    为了删掉几张停车场照片而丢掉阴天的真风景照，性价比不成立。
+
+    真正拦住"几辆白车"的是上一刀：POI 类型闸（typecode_ok）+ 同名程度（match_rank）。
     打分拿不到（离线、超时、防盗链）时**不判死刑**：保留原图，
     因为"我们没量到"和"图确实糊"是两件事，界面不该因为前者变成空白。
     """
@@ -240,11 +354,12 @@ def filter_poi_photos(chain: Chain, settings, pois, per_poi: int = 4) -> tuple[i
                 ranked.append((min_lap + 1, u))       # 未知：保留，排在合格图之后
                 continue
             w, h, lap = got[0], got[1], got[2]
+            gray, skyveg, color = (got + [0.0, 1.0, 0.0])[3:6]
             if min(w, h) < min_edge or lap < min_lap:
                 continue
-            ranked.append((lap, u))
+            ranked.append((content_rank(w, h, lap, gray, skyveg, color), u))
         ranked.sort(key=lambda x: -x[0])
-        kept = [u for _lap, u in ranked][:per_poi]
+        kept = [u for _score, u in ranked][:per_poi]
         dropped += len(p.photos) - len(kept)
         p.photos = kept
     return dropped, len(targets)

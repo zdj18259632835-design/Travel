@@ -541,3 +541,154 @@ slot.extras = {**(slot.extras or {}), "audience_reason": reason, ...}   # 对
 [providers/poetry.py](../src/tripagent/providers/poetry.py)、
 [ui_render.py 的 `poem_line`](../ui_render.py)
 测试：`tests/test_poetry.py`（13 个）、`test_poem_line_renders_in_real_app`
+
+---
+
+# 第七部分　用户实测暴露的四个问题：停车场照片、画幅、字号、以及"功能没生效"
+
+这一轮全部由真实测试反馈驱动，而且**第一个结论推翻了我原来的设计假设**。
+
+## 7.1 "就给我看几辆白车"——根因不是算法看不懂图
+
+我看到的第一反应是"图像内容理解不够"，准备去加语义特征。
+先做的却是把高德原始响应打出来（`scripts/probe_image_types.py`），结果是这样：
+
+```
+宝塔山景区              typecode=110210  风景名胜;红色景区
+宝塔山景区地下停车场     typecode=150904  交通设施服务;停车场;公共停车场
+宝塔山景区游客中心停车场  typecode=150904
+宝塔山景区停车场(出入口)  typecode=150909
+宝塔山                 typecode=190203  地名地址信息;自然地名;山
+宝塔山景区游客中心        typecode=070201  生活服务;信息咨询中心
+```
+
+而老代码的匹配规则是"名字互相包含"——**"宝塔山景区"确实包含在"宝塔山景区地下停车场"里**。
+所以停车场的照片被当成景区照片取了进来。更讽刺的是排序：
+车身、水泥地的边缘又密又锐利，拉普拉斯方差比阴天的风景照还高，
+于是"最清晰的一张排最前"这条规则专门把停车场图顶到了第一张。
+
+> 可迁移的原则：**先怀疑数据管线的接缝，再怀疑模型的能力。**
+> 我差点为一个匹配 bug 去训练图像分类器。
+
+修法是按重要性排的两刀，不是一刀：
+
+1. **类型闸（决定性的那一刀）**：`typecode_ok()`，只允许
+   `11 风景名胜 / 08 体育休闲 / 14 科教文化 / 05 餐饮 / 06 购物 / 19 地名地址`，
+   明确排除停车场、政府机构、住宿、汽车服务、医院、银行。缺字段不判死刑。
+2. **同名程度分档**：`match_rank()` 给 3（完全同名）/ 2（以查询开头）/ 1（互相包含），
+   排序时先按它再按清晰度，"宝塔山景区"不再被"宝塔山景区地下停车场"抢走封面。
+
+## 7.2 阈值扫描：内容信号最后只配做排序，不配做删除
+
+类型闸之后，我还是给图片加了三个内容指标（全 numpy，不引 OpenCV/torch）：
+灰白低饱和占比、天空或植被占比、Hasler & Süsstrunk 色彩丰富度。
+本来打算用它们删图，于是先量了 358 张真实图，按 typecode 分组：
+
+| 类型 | n | 灰白中位 | 灰白 P90 | 天空/植被中位 | 色彩中位 |
+| --- | --- | --- | --- | --- | --- |
+| 风景名胜 | 158 | 0.100 | 0.363 | 0.196 | 0.165 |
+| 交通设施 | 63 | 0.162 | 0.393 | 0.145 | 0.161 |
+| 生活服务 | 31 | 0.267 | 0.396 | 0.027 | 0.100 |
+| 住宿 | 12 | 0.306 | 0.492 | 0.118 | 0.116 |
+
+分布**重叠得很厉害**，中位数差不到两倍。于是把阈值整个扫了一遍
+（`scripts/probe_image_types.py` 会打印这张表）：
+
+| 灰白线 | 天空植被线 | 色彩线 | 误杀真景点 | 命中无聊图 |
+| --- | --- | --- | --- | --- |
+| 0.35 | 0.08 | 0.10 | 12/204 | 8/106 |
+| 0.40 | 0.08 | 0.10 | **7/204** | **6/106** |
+| 0.45 | 0.08 | 0.10 | 6/204 | 6/106 |
+| 0.50 | 0.08 | 0.10 | 3/204 | 5/106 |
+
+**用内容信号删图的性价比不成立**：为了多拦 6 张无聊图，要陪葬 7 张真景点图。
+所以最终实现是——删除只依据硬事实（分辨率、清晰度），
+内容信号只进 `content_rank()` 排序，把"没什么可看"的图压到最后一张。
+配置里我一度加了三个 `image_drop_*` 阈值，量完数据后**把它们删了**：
+留着就是假装这套判据能用。
+
+测试 `test_filter_drops_blurry_and_small_and_ranks_by_content` 把这条结论钉住了，
+注释里写着"灰白图只降权，不删除（阈值扫描的结论）"。
+
+> 可迁移的原则：**"能不能删"要由误杀率决定，不是由平均分差决定。**
+> 平均数好看的指标，尾部往往和正类纠缠在一起。
+
+## 7.3 画幅：借鉴 GitHub 上的通行做法，最后只用一条 CSS
+
+用户说"有些图片大到整屏放不下，还要上下滑"。我先去看成熟相册组件怎么做，
+结论是它们用的是同一套语义（仓库都在维护，CSS 原文可查）：
+
+| 项目 | 缩略图 | 原图 |
+| --- | --- | --- |
+| [blueimp Gallery](https://github.com/blueimp/Gallery) | 固定画幅 + `object-fit: cover` | `width:auto;height:auto;max-width:100%;max-height:100%;margin:auto` |
+| [PhotoSwipe](https://github.com/dimsemenov/PhotoSwipe) | 同上 | `.pswp__img{width:auto;height:auto}`，JS 按视口算 contain 缩放 |
+| [lightGallery](https://github.com/sachinchoolur/lightGallery) | `.lg-thumb-item img{width:100%;object-fit:cover}` | 容器内 contain |
+| [baguetteBox](https://github.com/feimosi/baguetteBox.js) | — | `max-width/height:100%` |
+
+这对关系有标准命名：**cover = 裁切填充，contain = 完整适配留白**（MDN 的 `object-fit` 关键词）。
+关键点：`<img>` 本身按固有比例缩放时天然不裁，**不需要** `object-fit`；
+`object-fit: cover` 恰恰是上一轮"广州艺术博物院看不到全貌"的元凶。
+
+我们不需要引入任何第三方库——翻页和弹层已经用 Streamlit 原生控件做好了，
+缺的只是尺寸上限。于是只加一条 CSS（`ui_theme.py`）：
+
+```css
+[data-testid="stImage"] img {
+    width: auto !important; height: auto !important;
+    max-width: 100%; max-height: 46vh;      /* 视口高度的一半左右，统一标准 */
+    margin: 0 auto; display: block;
+}
+[data-testid="stDialog"] [data-testid="stImage"] img { max-height: 76vh; }  /* 点开原图可以更大 */
+```
+
+`!important` 是必要的：`st.image(width="stretch")` 会给 img 写内联 `width:100%`，
+不覆盖就永远按宽度铺满、竖图把整屏撑跑。
+选择器名来自 Streamlit 前端源码的 `ImageList` 组件（`stImage`/`stImageContainer`/`stImageCaption`）。
+
+**为什么没有真的引库**：jsDelivr 与 unpkg 在中国大陆都出过可达性问题（jsDelivr 自 2021-12 起被 DNS 污染），
+引入 CDN 依赖等于给评审现场加一个不可控故障点。
+
+## 7.4 文字与来源标注
+
+- 推荐理由从 `st.markdown` 纯文本改成带类名的 HTML 行：`.slotline` 15.5px、近黑 `#12201A`；
+  避坑 `.pitline`、亮点 `.metaline` 各配一档字号，层级靠颜色与字号而不是加粗堆。
+- 图片说明去掉"高德公开图"字样，只留"地点名（第 n/N 张）"。
+  来源合规声明仍然在 `docs/DATA_SOURCES.md` 与作品帖里——**不标注不等于不说**，
+  界面是给用户看的，出处是给审计者看的，两个地方各有分工。
+
+## 7.5 复盘：诗词与"全国文旅公开图"为什么没出现
+
+用户问"上次不是加了古诗功能吗，怎么测不到"。查下来的结论分两半，都不好听：
+
+1. **诗词：链路是通的，覆盖不够。** 延安不在 `poetry.json` 的 36 城里，
+   而规则是"没有可靠条目就不出现"，所以宝塔山一句诗都没有。
+   这正是设计后果，但用户视角就是"功能没生效"。
+   本轮补了 8 个用户真会测的城市（延安、秦皇岛、徐州、兰州、乌鲁木齐、宜昌、三亚、郑州），
+   每条都要能核对作者与出处——延安用范仲淹《渔家傲·秋思》，因为他守的就是延州。
+   哈尔滨、深圳、丽江仍然空着，它们没有我能确证的古诗，**宁缺毋滥不改**。
+   回归测试：`test_yanan_is_covered_after_user_reported_it_missing`。
+2. **"全国文旅公开图"从来没有实现过。** 我当时说的是"可以取各地文旅宣传账号的公开图"，
+   实际接进来的是**高德 POI 公开图**。文旅系统真正可个人访问的公开数据是
+   **名录类**（文旅部 5A 景区名录、非遗名录），它们是结构化文字，**不是图片接口**；
+   而带图的文旅新媒体账号内容抓取，仍然踩在 ToS 与版权两条线上。
+   所以文档与作品帖里不能写"接入全国文旅公开图"，只能写"接入文旅部公开名录 + 高德授权 POI 图"。
+
+> 可迁移的原则：**功能是"做到了什么"，不是"讨论过什么"。**
+> 复盘时把这两者分开，是避免下一轮自我欺骗的唯一办法。
+
+## 7.6 我量过但没做的：云端视觉模型复核
+
+百炼账号里有 `qwen3-vl-plus`，用它对首图做 zero-shot 打分是可行的，
+成本也便宜（图像 token 按 `h̄·w̄/32²+2` 计，1024×768 ≈ 770 token，
+qwen-vl-plus 输入 0.8 元/百万 ⇒ 约 0.0007 元/张，千张不到 1 元）。
+本轮**没有接**，理由不是成本，是收益：类型闸已经把停车场图从源头挡掉，
+剩下的分歧集中在"这张建筑照好不好看"，那是审美而不是事实，
+交给模型只会把不确定从数据层搬进结论层。
+真要接，正确位置是 `filter_poi_photos` 排序之后、只对进入首屏的 1 张做复核，
+并复用现成的按天预算闸门。
+
+代码位置：[providers/images.py](../src/tripagent/providers/images.py)（`typecode_ok`、`match_rank`、`scene_signals`、`content_rank`）、
+[ui_theme.py](../ui_theme.py)（画幅与文字样式）、[ui_render.py](../ui_render.py)（`photo_gallery`、`slot_block`）、
+探针 [scripts/probe_image_features.py](../scripts/probe_image_features.py)、
+[scripts/probe_image_types.py](../scripts/probe_image_types.py)
+测试：`tests/test_image_filter.py`（8 个）、`test_yanan_is_covered_after_user_reported_it_missing`

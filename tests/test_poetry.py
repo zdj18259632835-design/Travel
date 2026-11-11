@@ -147,6 +147,22 @@ def test_library_lookup_tolerates_admin_suffixes_and_county_names():
     assert entries_for(LIB, "") == []
 
 
+def test_yanan_is_covered_after_user_reported_it_missing():
+    """用户实测宝塔山时一句诗都没有：不是规则坏了，是库里当时没有延安。
+
+    这类"功能存在但覆盖不到"的缺口，只有真实测试地名才会暴露，所以把它钉成测试。
+    """
+    from tripagent.providers.poetry import entries_for
+
+    rows = entries_for(LIB, "延安市")
+    assert rows, "延安必须有覆盖，用户真的会测红色旅游城市"
+    assert "范仲淹" in rows[0]["author"] and "渔家傲" in rows[0]["from"]
+    assert any("宝塔" in (r.get("match") or []) for r in rows)
+    # 用户会测的城市尽量补齐（不是全覆盖，是没有条目就不出现）
+    for city in ("延安", "秦皇岛", "徐州", "兰州", "乌鲁木齐", "宜昌", "三亚", "郑州"):
+        assert entries_for(LIB, city), f"{city} 缺条目"
+
+
 def test_poetry_capability_has_a_chain(settings):
     assert settings.chain("poetry") == ["fixture", "none"] or "fixture" in settings.chain("poetry")
 
