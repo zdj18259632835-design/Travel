@@ -132,6 +132,8 @@ hr { border-color: rgba(61,107,90,.18); }
 /* ---------- 行程条目的文字：用户反馈"字小、颜色不醒目" ---------- */
 .slotline { color: #12201A; font-size: 15.5px; line-height: 1.62; margin: 2px 0 0; }
 .slotline b { color: #12201A; }
+/* 时段分组说明（"光照正合适……"）：用户点名的一行，之前用的是 st.caption 的灰小字 */
+.bandnote { color: #12201A; font-size: 15px; line-height: 1.6; margin: 0 0 4px 12px; }
 .pitline { color: #9a4526; font-size: 14px; line-height: 1.55; margin: 6px 0 0; }
 .metaline { color: #45584F; font-size: 14px; line-height: 1.55; margin: 4px 0 0; }
 

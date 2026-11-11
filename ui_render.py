@@ -134,6 +134,19 @@ def _badge_text(s: Slot) -> str:
     return " · ".join(_e(b) for b in bits)
 
 
+def content_line(text: str, kind: str = "why") -> None:
+    """正文行统一走这里：字号与颜色由 CSS 决定，不再用 st.caption。
+
+    st.caption 是"次要信息"的语义（12px、灰），而推荐理由、避坑、时段说明
+    是用户真正要读的句子。用户连着两轮反馈"字小、不醒目"，第二轮点名的那行
+    正是分组说明——上一轮我只改了卡片正文，漏了它，所以这里把四类正文行收成一个函数。
+    """
+    from html import escape as _e
+
+    cls = {"why": "slotline", "pit": "pitline", "meta": "metaline", "band": "bandnote"}.get(kind, "slotline")
+    st.markdown(f'<div class="{cls}">{_e(text)}</div>', unsafe_allow_html=True)
+
+
 def photo_gallery(poi, key: str) -> None:
     """一张大图 + 左右箭头 + 点击放大。
 
@@ -211,19 +224,11 @@ def slot_block(s: Slot, audience: str, key: str) -> None:
         if badges:
             head += f" 　{badges}"
         st.markdown(head)
-        # 正文改成带类名的 HTML 行：Streamlit 默认正文 14px、颜色偏灰，
-        # 用户反馈"字小、不醒目"，这里统一提到 15.5px 近黑（样式在 ui_theme 的 .slotline）。
-        st.markdown(
-            f'<div class="slotline">为什么这个时段去：{_e(slot_reason(s, audience))}</div>',
-            unsafe_allow_html=True,
-        )
+        content_line(f"为什么这个时段去：{slot_reason(s, audience)}", "why")
         if s.poi and s.poi.why and not (s.extras or {}).get("audience_reason"):
-            st.markdown(f'<div class="metaline">亮点：{_e(s.poi.why[:90])}</div>', unsafe_allow_html=True)
+            content_line(f"亮点：{s.poi.why[:90]}", "meta")
         if s.poi and s.poi.pitfalls:
-            st.markdown(
-                f'<div class="pitline">避坑：{_e("；".join(s.poi.pitfalls[:2]))}</div>',
-                unsafe_allow_html=True,
-            )
+            content_line("避坑：" + "；".join(s.poi.pitfalls[:2]), "pit")
         poem_line(s)
 
 
@@ -237,7 +242,7 @@ def day_view(day: DayPlan, audience: str) -> None:
             unsafe_allow_html=True,
         )
         if BAND_NOTE.get(band):
-            st.caption(BAND_NOTE[band])
+            content_line(BAND_NOTE[band], "band")
         for s in slots:
             # key 必须带天数：Slot.seq 每天从 1 重新计，只靠序号会在跨天撞车，
             # 撞车的后果是两张卡片共享同一个翻页位置——很难查，所以在这里就堵死。

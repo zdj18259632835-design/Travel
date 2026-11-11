@@ -385,11 +385,11 @@ def tab_ask(svc: TripService, can_run: bool = True) -> None:
             if r.poi.district or r.poi.metro:
                 st.caption(f"{r.poi.district} {('· 地铁 ' + r.poi.metro) if r.poi.metro else ''}")
             if r.reasons:
-                st.caption("推荐理由：" + "；".join(r.reasons[:4]))
+                ui_render.content_line("推荐理由：" + "；".join(r.reasons[:4]), "why")
             for e in r.reviews:
                 st.caption(f"网友：{e.brief(110)}  · {e.source}")
             if r.poi.pitfalls:
-                st.caption("避坑：" + "；".join(r.poi.pitfalls))
+                ui_render.content_line("避坑：" + "；".join(r.poi.pitfalls), "pit")
             if r.poi.age_policy or r.poi.requires_id:
                 st.warning(f"准入：{r.poi.age_policy or '需实名核验身份证'}")
     for wtext in ans.warnings:

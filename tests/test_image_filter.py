@@ -157,6 +157,37 @@ def test_ui_does_not_label_the_photo_source_anymore():
     assert "高德公开图" not in text
 
 
+def test_band_note_is_a_content_line_not_a_caption():
+    """用户第二轮点名的就是这一行：分组说明"光照正合适……"还是灰小字。
+
+    第一轮我只改了卡片正文，漏了 day_view 里的分组说明——
+    凡是用户要读的句子都不该用 st.caption（12px、灰色、语义是"次要信息"）。
+    """
+    root = Path(__file__).resolve().parents[1]
+    src = (root / "ui_render.py").read_text(encoding="utf-8")
+    assert "st.caption(BAND_NOTE" not in src
+    assert 'content_line(BAND_NOTE[band], "band")' in src
+    css = (root / "ui_theme.py").read_text(encoding="utf-8")
+    assert ".bandnote" in css and "#12201A" in css
+    # 即时问答的推荐理由与避坑同样升级，不允许退回 caption
+    app = (root / "app.py").read_text(encoding="utf-8")
+    assert 'content_line("推荐理由：' in app
+    assert 'st.caption("推荐理由' not in app
+
+
+def test_image_cap_selector_matches_real_streamlit_markup():
+    """CSS 选择器不能凭想象：stImage / stDialog 这些 testid 必须在已装的 Streamlit 里存在。"""
+    import streamlit
+    from pathlib import Path as _P
+
+    root = _P(streamlit.__file__).parent / "static"
+    js = list(root.rglob("*.js"))
+    assert js, "没找到 Streamlit 前端 bundle，这个测试就没意义"
+    blob = "".join(f.read_text(encoding="utf-8", errors="ignore") for f in js)
+    for tid in ("stImage", "stImageCaption", "stDialog"):
+        assert tid in blob, f"Streamlit 1.66 前端里没有 {tid}，CSS 会打不中"
+
+
 def test_image_window_is_capped_and_not_cropped():
     """统一画幅：高度上限按视口给，且必须是 contain 语义（不许 cover 裁切）。"""
     css = (Path(__file__).resolve().parents[1] / "ui_theme.py").read_text(encoding="utf-8")
