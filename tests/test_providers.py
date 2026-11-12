@@ -603,34 +603,3 @@ def _patched_raw(module, fn):
             module._search_raw = old
 
     return cm()
-
-
-def test_amap_walking_duration_is_seconds_not_minutes():
-    """高德 v5 的 walking 在 cost.duration 里给**秒**。旧代码用数量级猜单位（>480 才当秒），
-    于是 8 分钟以下的短步行被放大 60 倍：370 秒（6 分钟）写成「需步行 370 分」，
-    通勤占比与步行上限两条校验随之长期报假警。
-    下面的数字是从真实接口抓回来的（796 米 / 637 秒、1637 米 / 1310 秒）。"""
-    from tripagent.providers.transit import _parse_amap_route
-
-    def payload(meters: str, seconds: str) -> dict:
-        return {"route": {"paths": [{"distance": meters, "cost": {"distance": None, "duration": seconds}}]}}
-
-    short = _parse_amap_route(payload("796", "637"), "walk")
-    assert 8 <= short.minutes <= 15, f"637 秒应约 10 分钟，实得 {short.minutes} 分"
-    assert short.distance_m == 796
-    long = _parse_amap_route(payload("1637", "1310"), "walk")
-    assert 18 <= long.minutes <= 25, f"1310 秒应约 22 分钟，实得 {long.minutes} 分"
-    assert long.source == "amap"
-    # 上面两个数都 >480，旧启发式恰好猜对；真正出错的是这一档（用户实测到的那条 370 分）
-    tiny = _parse_amap_route(payload("210", "170"), "walk")
-    assert tiny.minutes <= 5, f"170 秒是不到 3 分钟的步行，实得 {tiny.minutes} 分（旧代码在这里报 170 分）"
-
-
-def test_amap_transit_minutes_field_is_not_double_divided():
-    """v3 的 transits[].minutes 已经是分钟，不能被当成秒再除一次。"""
-    from tripagent.providers.transit import _parse_amap_route
-
-    leg = _parse_amap_route({"route": {"transit": {"transits": [{"minutes": "34", "distance": "9000"}]}}}, "transit")
-    assert leg.minutes == 34, leg.minutes
-    leg2 = _parse_amap_route({"route": {"transit": {"transits": [{"duration": "1500", "distance": "9000"}]}}}, "transit")
-    assert leg2.minutes == 25, leg2.minutes

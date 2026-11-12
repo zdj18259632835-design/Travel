@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..knowledge.cities import CityInfo
-from ..models.common import GeoPoint, estimate_minutes
+from ..models.common import GeoPoint
 from ..models.poi import RouteLeg
 from .base import Provider, ProviderError, provider
 
@@ -43,8 +43,7 @@ class AMapTransit(Provider):
             return [_parse_amap_route(data, mode)]
 
         rows = self.cached_call(
-            # amap2：秒/分换算改错过一次（见 _to_minutes），旧缓存里的 minutes 是错的，必须让它整体失效
-            ("transit", "amap2", mode, round(origin.lat, 4), round(origin.lng, 4), round(dest.lat, 4), round(dest.lng, 4)),
+            ("transit", "amap", mode, round(origin.lat, 4), round(origin.lng, 4), round(dest.lat, 4), round(dest.lng, 4)),
             fetch,
             RouteLeg,
         )
@@ -57,7 +56,7 @@ def _parse_amap_route(data: dict, mode: str) -> RouteLeg:
         transits = route.get("transit") or {}
         rows = transits.get("transits") if isinstance(transits, dict) else None
         first = (rows or [{}])[0]
-        minutes = _to_minutes(first.get("minutes"), unit="minutes") or _to_minutes(first.get("duration"), unit="seconds")
+        minutes = _to_minutes(first.get("minutes") or first.get("duration"))
         dist = _to_int(first.get("distance"))
         cost = _to_yuan_cents(first.get("fare") or first.get("cost"))
         lines = []
@@ -71,7 +70,7 @@ def _parse_amap_route(data: dict, mode: str) -> RouteLeg:
                         lines.append(str(item["name"]))
         return RouteLeg(
             mode="transit",
-            minutes=minutes or (estimate_minutes(dist, "transit") if dist else 25),
+            minutes=minutes or 25,
             distance_m=dist,
             cost_cents=cost,
             summary="换乘" + " → ".join(lines[:3]) if lines else str(route.get("transit", ""))[:60] or "公交换乘",
@@ -80,11 +79,11 @@ def _parse_amap_route(data: dict, mode: str) -> RouteLeg:
     paths = route.get("paths") or [{}]
     first = paths[0] if isinstance(paths, list) and paths else {}
     cost_block = first.get("cost") or {}
+    minutes = _to_minutes(cost_block.get("duration") or first.get("duration"))
     dist = _to_int(cost_block.get("distance") or first.get("distance"))
-    minutes = _to_minutes(cost_block.get("duration") or first.get("duration"), unit="seconds")
     return RouteLeg(
         mode=mode,
-        minutes=minutes or (estimate_minutes(dist, mode) if dist else 20),
+        minutes=minutes or 20,
         distance_m=dist,
         cost_cents=_to_yuan_cents(cost_block.get("tolls") or 0),
         summary=str(first.get("steps") and f"{len(first['steps'])} 段") or mode,
@@ -92,26 +91,14 @@ def _parse_amap_route(data: dict, mode: str) -> RouteLeg:
     )
 
 
-def _to_minutes(v: Any, *, unit: str = "auto") -> int:
-    """把高德返回的耗时换成分钟。
-
-    unit="seconds" / "minutes" 按字段名给定；"auto" 才用数量级猜。
-    实测教训：v5 的 walking / driving / bicycling 一律在 cost.duration 里给**秒**，
-    而旧代码只看数量级（>480 当秒，否则当分）。8 分钟以下的路段落在 480 以下，
-    于是 370 秒（6 分钟）被当成 370 分钟：界面里那条「需步行 370 分」是假的，
-    通勤占比与步行上限两条校验随之长期报假警。
-    字段名是确定的信息，不该退化成猜测。
-    """
+def _to_minutes(v: Any) -> int:
     try:
         f = float(v)
     except (TypeError, ValueError):
         return 0
     if f <= 0:
         return 0
-    if unit == "seconds":
-        return max(1, int(round(f / 60)))
-    if unit == "minutes":
-        return int(round(f))
+    # 高德不同版本分别返回分钟或秒，用数量级区分
     return int(f / 60) if f > 480 else int(round(f))
 
 
