@@ -93,26 +93,6 @@ def match_rank(query: str, candidate: str) -> int:
     return 1 if n >= 4 and a[:4] == b[:4] else 0
 
 
-def keep_alive(urls: list[str], timeout: float = 3.0) -> list[str]:
-    """并发 HEAD 探活，只丢掉明确拿不到的（4xx/5xx）。
-
-    网络异常不算失败：浏览器有缓存、有代理、有时机，服务端一次超时不该替它做决定。
-    """
-    if not urls:
-        return []
-
-    def check(u: str) -> bool:
-        try:
-            r = httpx.head(u, timeout=timeout, follow_redirects=True,
-                           headers={"User-Agent": "Mozilla/5.0 (compatible; TripAgent/0.1)"})
-            return r.status_code < 400
-        except Exception:
-            return True
-
-    with ThreadPoolExecutor(max_workers=min(6, len(urls))) as pool:
-        return [u for u, ok in zip(urls, pool.map(check, urls)) if ok]
-
-
 def sharpness(data: bytes) -> tuple[int, int, float]:
     """清晰度打分：返回 (宽, 高, 拉普拉斯方差)。
 
@@ -213,13 +193,13 @@ class AMapImages(Provider):
             return False, "未配置 AMAP_KEY，界面不显示实拍图"
         return True, "高德 POI 公开实拍图（按地点名回查，可达性校验后展示）"
 
-    def _one(self, city: CityInfo, name: str, per: int) -> list[str]:
+    def _one(self, city: CityInfo, name: str, per: int = 6) -> list[str]:
         params = {
             "key": self.settings.amap_key,
             "keywords": name,
             "region": city.adcode or city.name,
             "citylimit": "true",
-            "page_size": 8,
+            "page_size": 20,
             "page_num": 1,
             "show_fields": "photos",
         }
@@ -236,13 +216,20 @@ class AMapImages(Provider):
             cand = [c for c in cand if c[0] > 0 and c[1]]
             cand.sort(key=lambda x: -x[0])
             urls: list[str] = []
-            for rank, _ok, row in cand[:3]:
+            for rank, _ok, row in cand[:8]:
                 urls.extend(amap_photos(row, limit=per))
-            return keep_alive(list(dict.fromkeys(urls))[:per])
+            urls = list(dict.fromkeys(urls))[: max(per + 4, 12)]
+            # 可达性与打分合并成一次 GET：以前 HEAD 探活 + 后续 GET 打分是两趟流量。
+            # 并发批量下（8 路），拿不到字节的直接丢——这一趟本来就联网，"没下到"就是"给不了用户看"。
+            scored = self.quality(urls)
+            kept = [u for u in urls if scored.get(u)]
+            return kept[:per] or urls[:1]      # 全军覆没时留一张，至少不是空白卡片
 
-        return self.cached_call(("images", "amap", city.key, name, per), fetch)
+        # 键版本 amap→amap2：取图行数与 page_size 都变了，旧缓存里只有 3 张，
+        # 混用会让人以为"放宽行数没用"。
+        return self.cached_call(("images", "amap2", city.key, name, per), fetch)
 
-    def fetch_batch(self, city: CityInfo, names: list[str], per: int = 4) -> dict[str, list[str]]:
+    def fetch_batch(self, city: CityInfo, names: list[str], per: int = 6) -> dict[str, list[str]]:
         out: dict[str, list[str]] = {}
         todo = [n for n in dict.fromkeys(names) if n and n.strip()]
         if not todo:
@@ -277,7 +264,8 @@ class AMapImages(Provider):
             except Exception:
                 return []
 
-        with ThreadPoolExecutor(max_workers=min(8, len(todo))) as pool:
+        # 12 路：一次预筛要下 60-100 张图，8 路实测把这段拖到 21.6s，成了整条流水线的新瓶颈
+        with ThreadPoolExecutor(max_workers=min(12, len(todo))) as pool:
             results = list(pool.map(scored, todo))
         return {u: got for u, got in zip(todo, results) if got}
 
@@ -289,7 +277,7 @@ class FixtureImages(Provider):
     刻意不用占位图：假图比没图更伤信任。
     """
 
-    def fetch_batch(self, city: CityInfo, names: list[str], per: int = 4) -> dict[str, list[str]]:
+    def fetch_batch(self, city: CityInfo, names: list[str], per: int = 6) -> dict[str, list[str]]:
         path = Path(self.settings.fixture_dir) / f"{city.key}.json"
         if not path.exists():
             return {}
@@ -319,7 +307,42 @@ def content_rank(w: float, h: float, lap: float, gray: float, skyveg: float, col
     return math.log(lap + 1.0) * 6.0 + skyveg * 40.0 + color * 1.5 - gray * 50.0
 
 
-def filter_poi_photos(chain: Chain, settings, pois, per_poi: int = 4) -> tuple[int, int]:
+def screen_images(chain: Chain, settings, pois, probe: int = 3) -> tuple[int, int]:
+    """装配前的轻量闸门：每个候选只探前 probe 张，出现合格图就够，全不合格则清空。
+
+    为什么不直接复用 filter_poi_photos：那道闸门要把每个候选的 6 张全部下载打分，
+    24 个候选冷启动实测 26.7s，直接把一次规划的耗时顶到 55s。
+    而装配前真正要回答的问题只有一个——"这个候选有没有脸面进池子"，
+    探 3 张足够判定；剩下 3 张留给装配后那批真被排上的地点去下（数量从 24 缩到 ~12）。
+    """
+    targets = [p for p in pois if getattr(p, "photos", None)]
+    if not targets:
+        return 0, 0
+    urls = [u for p in targets for u in p.photos[:probe]]
+    res = chain.run("images", "quality", urls, allow_empty=True)
+    scores = res.value if isinstance(res.value, dict) else {}
+    if not scores:
+        return 0, 0
+    min_edge, min_lap = settings.image_min_edge, settings.image_min_lapvar
+    emptied = 0
+    for p in targets:
+        ok = []
+        for u in p.photos[:probe]:
+            got = scores.get(u)
+            if not got:
+                ok.append(u)                      # 没量到：先留着，装配后的全量闸门再算
+                continue
+            if min(got[0], got[1]) >= min_edge and got[2] >= min_lap:
+                ok.append(u)
+        if ok:
+            p.photos = ok + [u for u in p.photos[probe:]]
+        else:
+            p.photos = []
+            emptied += 1
+    return emptied, len(targets)
+
+
+def filter_poi_photos(chain: Chain, settings, pois, per_poi: int = 6) -> tuple[int, int]:
     """给一批 POI 筛掉糊图与小图，并把"最该看的一张"排到最前。
 
     返回 (淘汰张数, 受影响地点数)。

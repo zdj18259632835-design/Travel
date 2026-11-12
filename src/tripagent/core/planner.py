@@ -25,6 +25,7 @@ from ..models.weather import CityWeather, DayForecast, WeatherRisk
 from ..providers.base import Chain
 from .scoring import ScoreContext, Scored, score
 from .weather_risk import comfort_index
+from .light import bias as light_bias
 
 _SLOT_TYPE: dict[Category, SlotType] = {
     Category.FOOD: SlotType.MEAL,
@@ -352,7 +353,17 @@ class DayAssembler:
         return s
 
     def _pick(self, ranked: list[Scored], allow_outdoor: bool = True) -> Scored | None:
-        """预算过滤 + 人群硬排除 +（恶劣天气时）室内优先两遍扫描。"""
+        """预算过滤 + 人群硬排除 + 光照时段偏置 +（恶劣天气时）室内优先两遍扫描。"""
+        # 光照偏置放在这里而不是 score() 里：只有装配器知道"这一项要排在几点"，
+        # 而 score() 是对整个候选池算一次的全局分。
+        if self.forecast is not None:
+            for s in ranked:
+                delta, why = light_bias(bool(s.poi.indoor), self.cursor, self.forecast)
+                if delta:
+                    s.value += delta
+                    if why and why not in s.reasons:
+                        s.reasons.append(why)
+            ranked = sorted(ranked, key=lambda s: -s.value)
         party = self.request.party
         indoor_first = bool(self.risk and self.risk.prefer_indoor)
         passes = ([s for s in ranked if s.poi.indoor], ranked) if indoor_first else (ranked,)

@@ -166,7 +166,7 @@ def test_band_note_is_a_content_line_not_a_caption():
     root = Path(__file__).resolve().parents[1]
     src = (root / "ui_render.py").read_text(encoding="utf-8")
     assert "st.caption(BAND_NOTE" not in src
-    assert 'content_line(BAND_NOTE[band], "band")' in src
+    assert "schedule_note(band, slots, day.weather" in src
     css = (root / "ui_theme.py").read_text(encoding="utf-8")
     assert ".bandnote" in css and "#12201A" in css
     # 即时问答的推荐理由与避坑同样升级，不允许退回 caption

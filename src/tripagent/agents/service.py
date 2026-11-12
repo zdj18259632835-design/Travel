@@ -192,11 +192,13 @@ class TripService:
 
         # 4) 装配 + 校验 + 润色
         t_asm = _time.time()
+        self.prepare_photos(city, pool, outcome)
         planner = ItineraryPlanner(city, req, weather, self.chain, self.settings)
         plan = planner.plan(pool, lodging=lodging, evidence_ids=[e.id for e in evidence][:40])
         outcome.timings["·装配"] = round(_time.time() - t_asm, 1)
         outcome.trace.append(f"真实通勤：{planner.routes_resolved}/{len(plan.all_slots)} 段并发回查")
         self.attach_photos(city, plan, outcome)
+        self.drop_photoless_visual_slots(plan, outcome)
         self.crosscheck_pois(city, plan, outcome)
         self.attach_poems(city, plan, outcome)
         plan.blocking_advice = str(outcome.risk.get("blocking_advice") or "")
@@ -269,6 +271,109 @@ class TripService:
         return outcome
 
     # ------------------------------------------------------------------
+    def prepare_photos(self, city: CityInfo, pool: dict, outcome: PlanOutcome) -> int:
+        """装配前一次性把图备齐：补图 → 打分 → 淘汰不合格 → 剔除无图的视觉候选。
+
+        为什么必须放在装配之前、而且只做一次：
+        1. 用户要求"没有图就不要提供这个活动"。装配器看不到图就无法避开无图候选；
+           放在装配后处理，要么留下空洞卡片，要么删完出现空白日。
+        2. 上一版把质检留在装配后，同一批图被过两趟管线，实测"装配·实拍图·校验"涨到 27.8s；
+           更糟的是预筛时看着有图、质检后变成 0 图的候选（三亚千古情）还是被排进了行程。
+           合并成一次之后，"入池"就等于"有合格图"。
+
+        返回被剔除的候选数。餐饮与购物不强制有图——否则会出现"排不出饭吃"的行程。
+        """
+        import time as _time
+
+        from ..models.enums import Category
+        from ..providers.images import screen_images
+
+        visual = (Category.SIGHT, Category.MUSEUM, Category.PARK, Category.HISTORIC,
+                  Category.SHOW, Category.AMUSEMENT, Category.ESCAPE, Category.SPORTS,
+                  Category.CINEMA, Category.BAR, Category.KTV, Category.CLUB)
+        rows = [p for cat, lst in pool.items() if cat in visual for p in lst]
+        if not rows:
+            return 0
+        t0 = _time.time()
+
+        # 1) 主检索没带图的（大模型归纳出来的文旅条目居多）：按名字回查一次
+        missing = [p for p in rows if not p.photos]
+        if missing:
+            res = self.chain.run("images", "fetch_batch", city, [p.name for p in missing][:14], 6)
+            table = res.value or {}
+            for poi in missing:
+                urls = table.get(poi.name) or []
+                if urls:
+                    poi.photos = urls
+
+        # 2) 只探前 3 张判"有没有脸面进池子"；剩下 3 张留给装配后那批真被排上的地点去下。
+        #    以前这里对 24 个候选的 6 张图全量打分，冷启动实测 26.7s，把整趟规划顶到 55s。
+        rows.sort(key=lambda p: -(p.rating or 0))
+        screened = rows[:24]
+        emptied, touched = screen_images(self.chain, self.settings, screened)
+        self.last_photo_ms = int((_time.time() - t0) * 1000)
+
+        # 3) 一张合格图都没有的视觉候选，不进候选池
+        drop_names = {p.name for p in screened if not p.photos}
+        if drop_names:
+            for cat in list(pool):
+                if cat in visual:
+                    pool[cat] = [p for p in pool[cat] if p.name not in drop_names]
+            outcome.trace.append(
+                f"实拍图预筛：{len(drop_names)} 个候选查不到合格公开图，已不进候选"
+                f"（{'、'.join(sorted(drop_names))[:60]}）"
+            )
+        outcome.trace.append(
+            f"实拍图：预筛 {touched} 个候选（每只探 3 张）淘汰 {emptied} 个无合格图候选，"
+            f"耗时 {self.last_photo_ms / 1000:.1f}s"
+        )
+        return len(drop_names)
+
+    # ------------------------------------------------------------------
+    def drop_photoless_visual_slots(self, plan: TripPlan, outcome: PlanOutcome) -> int:
+        """最后一道兜底：视觉类时段最终一张合格图都没有，就从行程里去掉。
+
+        用户的原话是"数据库没有图片就不要提供这个活动"。
+        预筛只覆盖装配前的候选池，装配后仍可能出现"图全被质检淘汰"的情况，
+        所以这里再兜一次；餐饮/住宿/交通不在此列（没图也得吃饭睡觉）。
+
+        两个刻意的保守处理：
+        - 去掉之后当天一个可玩项都不剩，就**不删**——空白天比少一张图更糟；
+        - 删完必须重算 seq 与预算分项，否则界面还会显示已被去掉那项的钱。
+        """
+        from ..core.planner import _breakdown
+        from ..models.enums import Category, SlotType
+
+        keep_types = {SlotType.SIGHT, SlotType.SHOW, SlotType.NIGHTLIFE}
+        removed = 0
+        for day in plan.days:
+            survivors = []
+            for s in day.slots:
+                photoless = (
+                    s.type in keep_types
+                    and s.poi is not None
+                    and s.poi.category is not Category.FOOD
+                    and not s.poi.photos
+                )
+                if photoless:
+                    removed += 1
+                    outcome.trace.append(f"实拍图兜底：「{s.title[:20]}」没有合格公开图，已从行程去掉")
+                    continue
+                survivors.append(s)
+            if len(survivors) == len(day.slots):
+                continue
+            if not any(s.type in keep_types for s in survivors):
+                continue          # 宁可留一张空洞卡片，也不排出一个空白日
+            day.slots = survivors
+            for i, s in enumerate(day.slots, start=1):
+                s.seq = i
+            day.recompute_totals()
+        if removed:
+            lodging = plan.days[0].lodging if plan.days else None
+            plan.budget_breakdown = _breakdown(plan.days, lodging, plan.request)
+        return removed
+
+    # ------------------------------------------------------------------
     def attach_photos(self, city: CityInfo, plan: TripPlan, outcome: PlanOutcome) -> int:
         """给排定的每个活动补实拍图。
 
@@ -284,7 +389,7 @@ class TripService:
             import time as _time
 
             t = _time.time()
-            res = self.chain.run("images", "fetch_batch", city, [p.name for p in targets][:14], 4)
+            res = self.chain.run("images", "fetch_batch", city, [p.name for p in targets][:14], 6)
             self.last_photo_ms = int((_time.time() - t) * 1000)
             table = res.value or {}
             for poi in targets:

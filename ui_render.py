@@ -241,8 +241,12 @@ def day_view(day: DayPlan, audience: str) -> None:
             f'<div class="band"><div class="bandname">{_h(band)}</div></div>',
             unsafe_allow_html=True,
         )
-        if BAND_NOTE.get(band):
-            content_line(BAND_NOTE[band], "band")
+        if slots:
+            from tripagent.core.schedule_note import schedule_note
+
+            content_line(
+                schedule_note(band, slots, day.weather, BAND_NOTE.get(band, "")), "band"
+            )
         for s in slots:
             # key 必须带天数：Slot.seq 每天从 1 重新计，只靠序号会在跨天撞车，
             # 撞车的后果是两张卡片共享同一个翻页位置——很难查，所以在这里就堵死。

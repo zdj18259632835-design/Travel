@@ -273,6 +273,16 @@ class QWeather(Provider):
                     )
                 )
             if out:
+                # 覆盖不够就主动让位，而不是"有数据就赢"。
+                # 用户账号的 /v7/weather/15d 实测只给 7 天（11/12–11/18），
+                # 而行程是 11/20 起 —— 降级链的语义是"第一个非空即胜出"，
+                # 于是 7 天预报把 16 天的 Open-Meteo 挡在门外，
+                # 整个行程一天天气都拿不到：光照、暴晒、紫外线全说不成立，
+                # 用户看到的就是"中午该避暑却排了野餐，下午该室内却排了露天"。
+                if len(out) < days:
+                    raise ProviderError(
+                        f"和风只给 {len(out)} 天，覆盖不了本次要的 {days} 天，改用更长窗口的源"
+                    )
                 return out
         raise ProviderError("和风接口未返回 daily")
 
