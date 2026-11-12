@@ -79,10 +79,30 @@ AMAP_KEY=xxxxxxxx                # 高德 Web 服务：任意城市实时 POI（
 | 入口 | 文件 | 说明 |
 |---|---|---|
 | **网页版** | [app.py](app.py) | Streamlit，5 个页签：行程规划 / 即时问答 / 数据源自检 / 历史 / 关于 |
+| **自主智能体** | [agent.py](agent.py) | Coze 式循环：≤10 步 / ≤1000 万 token / ≤60 秒 / 显式完成信号，每步思考与观察都可展开 |
 | **命令行版** | [src/tripagent/cli.py](src/tripagent/cli.py) | `plan / ask / weather / doctor / cities / history / show / demo` |
 | **核心引擎（被上面两者调用）** | [src/tripagent/agents/service.py](src/tripagent/agents/service.py) | `TripService.plan_trip()` / `.ask()` / `.doctor()` |
 
 `python -m tripagent.cli` 与直接 `python src/tripagent/cli.py` 等价；已在 `pyproject.toml` 里注册了 `tripagent` 命令名。
+
+自主智能体和流水线是**同一批工具的两个外壳**：它不重写业务逻辑，只负责"这一步失败了就换个工具再来"。
+
+```bash
+# 看它自己决策（真实模型，约 30 秒）
+.venv\Scripts\python.exe agent.py "杭州 2天 11月20日出发 长辈同行 预算1200" --verbose
+
+# 只出 JSON，给脚本用
+.venv\Scripts\python.exe agent.py "成都 3天 情侣" --json
+
+# 一个 key 都不用：走确定性策略，交付物同源，只是没有逐步思考
+TRIPAGENT_OFFLINE=1 .venv\Scripts\python.exe agent.py "成都 3天 情侣"
+
+echo $LASTEXITCODE    # PowerShell；Git Bash 里写 echo $?
+# 退出码 0 = 模型自己给了 task_complete；1 = 被步数/token/时间任一条闸门中止（信号是 forced_finish）
+```
+
+界面版在 `.venv\Scripts\python.exe -m streamlit run agent.py` 下可用（独立页，不占用主界面）。
+详情见 [docs/LEARNING_NOTES.md](docs/LEARNING_NOTES.md) 第八部分。
 
 ---
 

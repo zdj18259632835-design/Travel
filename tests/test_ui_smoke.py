@@ -239,3 +239,29 @@ def test_owner_keeps_working_after_budget_exhausted(monkeypatch, outcome):
     finally:
         monkeypatch.delenv("TRIPAGENT_LLM_DAILY_TOKEN_BUDGET")
         UsageLedger(reload_settings().usage_path).reset()
+
+
+def test_agent_page_runs_end_to_end_and_shows_the_signal():
+    """README 写着"streamlit run agent.py 可用"，那就必须真的能点。
+    AppTest 会执行整个脚本：按钮按下 → run_agent（离线规则模式）→ 结果渲染，
+    任何一处 NameError 都会在这里变成 exception，而不是等用户在浏览器里看到白屏。"""
+    from streamlit.testing.v1 import AppTest
+
+    at = AppTest.from_file(str(ROOT / "agent.py"), default_timeout=180)
+    at.run()
+    assert not at.exception, f"智能体页首次渲染就抛异常：{[e.value for e in at.exception]}"
+    assert at.button, "页面上没有运行按钮，用户无从触发"
+
+    at.text_input[0].set_value("成都 2天 情侣 预算800")
+    at.button[0].click().run()
+    bad = [e.value for e in at.exception]
+    assert not bad, f"运行智能体时抛异常：{bad}"
+
+    boxes = [str(getattr(m, "value", "")) for m in at.success] + \
+            [str(getattr(m, "value", "")) for m in at.warning]
+    joined = " ".join(boxes)
+    assert "task_complete" in joined or "forced_finish" in joined, f"界面没显示完成信号：{boxes}"
+    # 约束必须可见：四个数字任缺其一，这个页就退化成普通流水线
+    for token in ("10", "60"):
+        assert token in joined, f"界面缺少约束提示 {token}：{joined[:200]}"
+    assert at.expander, "没有逐步轨迹，卡住时看不出是哪一步的问题"

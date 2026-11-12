@@ -692,3 +692,90 @@ qwen-vl-plus 输入 0.8 元/百万 ⇒ 约 0.0007 元/张，千张不到 1 元�
 探针 [scripts/probe_image_features.py](../scripts/probe_image_features.py)、
 [scripts/probe_image_types.py](../scripts/probe_image_types.py)
 测试：`tests/test_image_filter.py`（8 个）、`test_yanan_is_covered_after_user_reported_it_missing`
+
+---
+
+# 第八部分：自主智能体（agent.py）与"约束必须落在系统上"
+
+本轮新增一个顶层文件 [agent.py](../agent.py)：给这个仓库套一个 Coze 式的自主规划循环，
+硬约束是用户给的四个数——**最多 10 步、token 预算 1000 万、超时 60 秒、必须有任务完成信号**。
+
+## 1. 原理：循环不写业务，只写"看表"
+
+工具层七个函数（`resolve_city` / `check_weather` / `find_places` / `ask_entertainment` /
+`build_itinerary` / `review_plan` / `finish`）全部包住仓库里已经被测试盯着的真实能力，
+一个业务逻辑都不重写。智能体的价值不在比流水线聪明，而在**某一步失败时可以换个工具再来**。
+
+模型每步只输出一条 JSON 动作。`parse_action` 容忍 ```json 包裹和前后解释文字，
+因为 qwen 实际输出里"多写一句客套"是常态，把它判成失败等于白白消耗一步预算。
+
+两条设计上的选择值得单说：
+
+- **观察结果喂回模型时截到 1400 字符**（`OBS_CAP`）。不封顶的话 POI 清单会整包进 prompt，
+  下一步的 prompt 体积随步数指数增长，token 预算在第三步就被吃光。
+- **每步把剩余预算写进 transcript**：`剩余 31s、token 剩 9,992,797、步数 4/10`。
+  不给它看，它就会在只剩 20 秒时决定调用一个 25 秒的工具。
+
+## 2. 取舍：降级路径也必须是同一条协议
+
+没配 key 时走 `_rule_policy`（天气→建方案→复核→完成）。它刻意保留与 LLM 模式相同的
+`trace` 结构和完成信号，所以"降级"是可见、可对比的，而不是悄悄换了另一套行为。
+
+`forced_finish` 与 `task_complete` 是两个不同的信号值，调用方（CLI 退出码 / 界面）
+永远能区分"模型自己说做完了"和"预算耗尽了被迫收尾"。被中止时如果 `ctx.last_plan` 已经存在，
+照样把方案交付出去并在 summary 里写明是哪条约束拦的——**约束生效不等于产物作废**。
+
+## 3. 实测数字：60 秒一开始是装饰
+
+| 场景 | 步数 | token | 墙钟 | 状态 / 信号 |
+| --- | --- | --- | --- | --- |
+| 规则模式（`TRIPAGENT_OFFLINE=1`，全走 fixture） | 3/10 | 0 | 0.0s | finished / task_complete |
+| 三亚 3天 亲子 夜生活（真实模型） | 6/10 | 8,557 | 36.9s | finished / task_complete |
+| 杭州 2天 长辈同行（真实模型，修复后） | 6/10 | 9,829 | 36.6s | finished / task_complete |
+| **杭州 2天 长辈同行（修复前）** | 5/10 | 7,203 | **108.7s** | timeout / forced_finish |
+| 桩模型从不自愿收尾 | 10/10 | — | — | step_limit / forced_finish |
+| 桩模型单步 900 万 token | 2/10 | ≥10,000,000 | — | token_budget / forced_finish |
+| 桩工具跑到第 1 秒还没返回 | 1/10 | — | <10s | timeout / forced_finish（方案照样交付） |
+
+后三行是 `tests/test_engine.py` 里的桩用例：三条强制路径都用假模型、假工具跑，
+因为它们要验证的是循环，不是高德与和风。前两行和"修复前后"两行是真实命令的实测输出。
+
+那一行 108.7s 是本轮最有价值的失败：**只在"每步开始前"看表，等于默认"工具都很快"**。
+`build_itinerary` 单步（图片冷下载）跑了 40+ 秒，60 秒的闸门被一步冲穿近一倍。
+
+修法不是"提醒模型快点"，而是给工具本身加等待上限
+（`_call_with_deadline`：daemon 线程 + `join(limit)`，重工具 45s、轻工具 20s），
+到点就不等、把"已中止等待"当作观察喂回去并立刻停循环。
+配套的是 `HEAVY_MIN_LEFT = 32.0`：剩余时间不足时**直接拒绝执行**重工具而不是建议别调——
+约束要落在系统上才叫约束。
+
+一个诚实的代价：被中止的那次 `plan_trip` 线程仍在后台跑完（已发出去的网络请求召回不了），
+只是它的结果不再影响交付。CLI 退出时 daemon 线程随之消失，Streamlit 里则多烧几秒 CPU。
+
+## 4. 顺带挖出的老 bug：高德耗时是秒，不是分
+
+`_to_minutes` 原来靠数量级猜单位（`>480` 当秒，否则当分）。
+实测高德 v5 的 walking 恒在 `cost.duration` 里给**秒**，于是 370 秒（6 分钟）被读成 370 分钟：
+界面里那条「Day2 去「钱王祠」需步行 370 分」和「通勤 403 分 / 活动 435 分」全是假的，
+`route_efficiency`、`walk_leg_within_limit` 两条校验长期报假警。
+
+从真实接口抓回的两组数字：796 米 / 637 秒、1637 米 / 1310 秒。
+修法是**用字段名而不是数量级定单位**（`minutes` 是分钟、`duration` 是秒），
+缓存键同步从 `("transit","amap",…)` 升成 `("transit","amap2",…)` 让旧值整体失效——
+和第七轮图片质量键 `imgq2` 是同一个规矩：解析口径变了就必须让缓存换代，
+否则修好了代码也修不好用户看到的那份结果。
+
+修后同一趟杭州：记分卡 16/18 → 18/18，未通过项清空。
+
+代码位置：[agent.py](../agent.py)（`run_agent`、`_call_with_deadline`、`_rule_policy`）、
+[providers/transit.py](../src/tripagent/providers/transit.py)（`_to_minutes`、`_parse_amap_route`）
+测试：`tests/test_engine.py` 里 10 个智能体用例（含 `test_tool_overrunning_its_deadline_stops_the_loop`）、
+`tests/test_providers.py` 里 2 个耗时单位用例、`tests/test_ui_smoke.py` 里 1 个智能体页端到端冒烟；
+全量 **131 项通过**（上轮 127）。
+
+复现：
+```bash
+.venv/Scripts/python.exe agent.py "杭州 2天 11月20日出发 长辈同行 预算1200" --verbose
+echo $?                      # 0 = 模型自己给了 task_complete
+.venv/Scripts/python.exe -m pytest tests/test_engine.py -q -k deadline
+```

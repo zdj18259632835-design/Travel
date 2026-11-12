@@ -49,13 +49,13 @@
 | 7 | **数据来源与合规声明** | 逐条列（照 [DATA_SOURCES.md](DATA_SOURCES.md) §1 表）：Open-Meteo 16 天预报（免密钥）；中国气象局 `weather.cma.cn/api/alarm` 与中央气象台 `nmc.cn/rest/findAlarm` 实时预警（免密钥，按 adcode 过滤到本市/本省）；高德开放平台 Web 服务 POI 与路径（个人开发者 Key，可选）；通义千问 `enable_search` 联网检索 + 口碑归纳（可选）。**明确写清：本项目不抓取小红书/抖音/大众点评内容**，理由（企业资质 + 逐项权限审核 + 个人号无内容接口 + 逆向违反 ToS）与替代方案（LLM 联网归纳，输出显式标 `source=qwen_web_search`、置信度打折、仅在确有出处时填 URL）。**离线知识库全部来自公开常识与政务/文旅公开数据，人工整理** |
 | 8 | **用 Qoder 开发的过程与提示词记录** | 见 §2.1 |
 | 9 | **下一步** | 直接引 [ROADMAP.md](ROADMAP.md)：P1 地图可视化（高德 JS）、增量改单（用 `plan_versions` 做 patch 而非全量重算）、评测集（TravelPlanner/ChinaTravel 口径自动回归）；诚实标注"票务与实时房价没有个人可用的合规接口，不会用爬取解决" |
-| 10 | **附录** | 仓库结构、`pytest` 结果截图（**101 passed**）、代码行数、贡献说明（谁写了哪部分） |
+| 10 | **附录** | 仓库结构、`pytest` 结果截图（**131 passed**）、代码行数、贡献说明（谁写了哪部分） |
 
 ### 2.1 "用 Qoder 开发的过程"该写什么
 
 不要写成"我用 AI 生成了这个项目"。按**可验证的工程动作**写 6–8 条：
 
-1. **需求→分层**：先让 Qoder 生成目录骨架与数据契约（`models/`），并明确要求"引擎不得 import httpx"——这是后面 101 条离线测试能跑的前提；
+1. **需求→分层**：先让 Qoder 生成目录骨架与数据契约（`models/`），并明确要求"引擎不得 import httpx"——这是后面这批离线测试能跑的前提；
 2. **提示词范式**：每次改动都用"目标 + 涉及文件 + 验收命令"三段式。例如：*「在 `core/validator.py` 加一条 `commonsense` 约束：单日步行时长超过 `config.max_walk_minutes_per_leg` 时判未通过，通过 `_add(...)` 写法，`weight=1.2`，并在 `tests/test_engine.py` 补一条断言 `check.id == "walk_load_limit"` 的用例。验收：`pytest -q`」*；
 3. **用调试器定位真实数据**：F5 → 「CLI：生成行程」配置打断点，把 CMA 预警接口的真实 `data[]` 抓下来存成 `tests/test_providers.py:CMA_ROWS`，再让 Qoder 按这份真实样本写解析器（**不是让模型猜结构**）；
 4. **踩坑与修正**：把"海南海上大风被当成成都预警"这条写成小故事——现象 → 定位（`select_alarms` 只按地名匹配）→ 修法（用 `id` 前 6 位 adcode 的省级前缀）→ 补两条回归测试；
@@ -130,7 +130,7 @@
 
 | # | 检查 | 命令 / 位置 |
 |---|---|---|
-| 1 | 测试没红 | `.venv\Scripts\python.exe -m pytest -q` → 必须 `101 passed` |
+| 1 | 测试没红 | `.venv\Scripts\python.exe -m pytest -q` → 必须 `131 passed` |
 | 2 | 数据源可用性 | `.venv\Scripts\python.exe -m tripagent.cli doctor` |
 | 3 | 公网链接活着 | 浏览器**无痕窗口**打开 Qoder Sites 地址（避免用缓存证明可达） |
 | 4 | 网页服务起来 | `.venv\Scripts\python.exe -m streamlit run app.py` → `http://localhost:8501` |
@@ -217,7 +217,7 @@ set TRIPAGENT_OFFLINE=1
 ### 5.2 可运行性
 
 - [ ] 全新机器按 `README.md`「三分钟跑起来」能跑通（`.venv\Scripts\python.exe -m streamlit run app.py`）
-- [ ] `.venv\Scripts\python.exe -m pytest -q` → **101 passed**（数字变了要在帖子里说明原因）
+- [ ] `.venv\Scripts\python.exe -m pytest -q` → **131 passed**（数字变了要在帖子里说明原因）
 - [ ] `tripagent.cli doctor` 输出可读，缺 Key 的源显示「跳过 + 缺哪个变量」
 - [ ] **零 Key 完整跑通**：`set TRIPAGENT_OFFLINE=1` 后三条必演 query 都出完整行程
 - [ ] 断网预案三档（`--offline` / 环境变量 / 预生成 HTML）各实测过一次

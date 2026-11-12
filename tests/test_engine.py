@@ -388,3 +388,230 @@ def test_packing_adds_mask_only_when_air_is_flagged():
                                     AirQuality(date=start, aqi_us=170.0, pm25_max=130.0))
     day2 = DayPlan(index=1, date=start, city="成都", slots=[], risk=risk2)
     assert any("KN95" in i for i in _packing(req, [day2]))
+
+
+# ===========================================================================
+# TripAgent Loop（agent.py）：自主循环的四条硬约束
+#   最多 10 步 / 1000 万 token / 60 秒超时 / 显式完成信号
+# 这些测试全部离线：工具与台账都被换成桩，避免"测一条循环要烧一次网"。
+# ===========================================================================
+
+
+def _agent_module():
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    if str(root) not in sys.path:
+        sys.path.insert(0, str(root))
+    import agent
+
+    return agent
+
+
+class _Stub:
+    """假主控模型：按脚本依次返回动作，并"消耗"固定 token。"""
+
+    def __init__(self, replies, tokens=500):
+        self.replies = list(replies)
+        self.tokens = tokens
+        self.calls = 0
+
+    def chat(self, messages, **kw):
+        self.calls += 1
+        if len(self.replies) > 1:
+            raw = self.replies.pop(0)
+        else:
+            raw = self.replies[0]
+        _Ledger.total += self.tokens
+        return raw
+
+
+class _Ledger:
+    total = 0
+
+    def __init__(self, *a, **k):
+        pass
+
+    def tokens_today(self):
+        return _Ledger.total
+
+
+def _offline_svc(monkeypatch, agent, stub):
+    from tripagent.agents.service import TripService
+    from tripagent.config import get_settings
+
+    monkeypatch.setattr(agent, "UsageLedger", _Ledger)
+    _Ledger.total = 0
+    s = get_settings().model_copy(update={"offline": False, "dashscope_api_key": "TEST-KEY"})
+    svc = TripService(s)
+    svc.chain._instances["llm:dashscope"] = stub
+    # 工具换成桩：测的是循环，不是高德与和风
+    for name in list(agent.TOOLS):
+        monkeypatch.setitem(agent.TOOLS, name, lambda ctx, args, n=name: {"stub": n})
+    return svc
+
+
+def test_parse_action_accepts_fences_and_prose():
+    agent = _agent_module()
+    ok = agent.parse_action('```json\n{"action":"check_weather","args":{"city":"成都"}}\n```')
+    assert ok[0]["action"] == "check_weather" and ok[1] == ""
+    # 模型常在 JSON 前后多写一句解释，这不算失败
+    ok = agent.parse_action('好的，我先查天气。{"thought":"先看天","action":"resolve_city","args":{"city":"三亚"}}')
+    assert ok[0]["action"] == "resolve_city"
+    bad = agent.parse_action("今天天气不错，适合出去玩")
+    assert bad[0] is None and "不是可执行动作" in bad[1]
+
+
+def test_step_limit_still_emits_a_completion_signal(monkeypatch):
+    """跑满 10 步也必须给信号，而且必须是"没做完"的那个信号。"""
+    agent = _agent_module()
+    stub = _Stub(['{"thought":"再查一次","action":"resolve_city","args":{"city":"成都"}}'])
+    svc = _offline_svc(monkeypatch, agent, stub)
+    run = agent.run_agent("成都 2天 情侣", svc=svc)
+    assert run.steps_used == agent.MAX_STEPS == 10
+    assert stub.calls == agent.MAX_STEPS, "步数上限必须由循环强制，而不是指望模型自觉"
+    assert run.status == "step_limit" and run.signal == "forced_finish"
+    assert run.plan_ready is False and run.completed is False if False else not run.as_dict()["completed"]
+
+
+def test_finish_action_is_the_only_task_complete(monkeypatch):
+    agent = _agent_module()
+    stub = _Stub(['{"thought":"交付","action":"finish","args":{"summary":"两天方案已就绪","plan_ready":true}}'])
+    svc = _offline_svc(monkeypatch, agent, stub)
+    run = agent.run_agent("成都 2天 情侣", svc=svc)
+    assert run.status == "finished" and run.signal == "task_complete"
+    assert run.as_dict()["completed"] is True and run.summary == "两天方案已就绪"
+    assert run.steps_used == 1
+
+
+def test_token_budget_stops_the_loop(monkeypatch):
+    agent = _agent_module()
+    stub = _Stub(['{"thought":"继续","action":"resolve_city","args":{"city":"成都"}}'], tokens=9_000_000)
+    svc = _offline_svc(monkeypatch, agent, stub)
+    run = agent.run_agent("成都 2天 情侣", svc=svc)
+    assert run.status == "token_budget", run.status
+    assert run.signal == "forced_finish"
+    assert run.steps_used == 2 and run.tokens_used >= agent.TOKEN_BUDGET
+
+
+def test_timeout_stops_the_loop(monkeypatch):
+    agent = _agent_module()
+
+    class Slow(_Stub):
+        def chat(self, messages, **kw):
+            import time
+
+            time.sleep(0.05)
+            return super().chat(messages, **kw)
+
+    stub = Slow(['{"thought":"继续","action":"resolve_city","args":{"city":"成都"}}'])
+    svc = _offline_svc(monkeypatch, agent, stub)
+    monkeypatch.setattr(agent, "TIMEOUT_S", 0.3)
+    run = agent.run_agent("成都 2天 情侣", svc=svc)
+    assert run.status == "timeout" and run.signal == "forced_finish"
+    assert run.seconds >= 0.3
+
+
+def test_heavy_tool_is_refused_when_time_is_short(monkeypatch):
+    """60 秒的闸门要能挡住一个 25 秒的工具，否则"建议模型别调"等于没建议。"""
+    agent = _agent_module()
+    stub = _Stub(['{"thought":"排方案","action":"build_itinerary","args":{"request_text":"成都 2天"}}'])
+    svc = _offline_svc(monkeypatch, agent, stub)
+    ran: list[str] = []
+    monkeypatch.setitem(agent.TOOLS, "build_itinerary", lambda ctx, args: ran.append("x") or {"ok": True})
+    monkeypatch.setattr(agent, "TIMEOUT_S", 20.0)      # 剩余 20s < HEAVY_MIN_LEFT 32s
+    run = agent.run_agent("成都 2天 情侣", svc=svc)
+    assert ran == [], "时间不足时重工具仍被执行，超时约束形同虚设"
+    assert "拒绝执行" in run.trace[0].observation.get("error", "")
+    assert run.trace[0].action == "build_itinerary"
+
+
+def test_invalid_output_is_rejected_and_asks_again(monkeypatch):
+    agent = _agent_module()
+    stub = _Stub(["让我想想，不如去问问用户吧。",
+                  '{"thought":"交付","action":"finish","args":{"summary":"完成","plan_ready":true}}'])
+    svc = _offline_svc(monkeypatch, agent, stub)
+    run = agent.run_agent("成都 2天 情侣", svc=svc)
+    assert run.trace[0].action == "invalid"
+    assert run.signal == "task_complete" and run.steps_used == 2
+
+
+def test_rule_policy_offline_still_delivers_with_signal():
+    """没有模型 key 时也要能交付，并且给出同一个完成信号——降级不该让调用方看不出断层。"""
+    agent = _agent_module()
+    from tripagent.agents.service import TripService
+    from tripagent.config import get_settings
+
+    s = get_settings()          # 测试环境强制 offline + 空 key
+    svc = TripService(s)
+    run = agent.run_agent("成都 2天 11月20日出发 情侣 预算1500", svc=svc)
+    assert run.mode == "rule"
+    assert run.signal == "task_complete" and run.plan_ready
+    assert run.steps_used == 3
+    assert [s.action for s in run.trace] == ["check_weather", "build_itinerary", "review_plan"]
+
+
+def test_find_places_passes_the_singular_category_field(monkeypatch):
+    """回归：POIQuery 的字段是单数 category。写成 categories 会被 extra="allow" 静默吞掉，
+    结果是无论模型要"酒吧酒馆"还是"剧场演出"，都只返回默认的风景名胜。"""
+    agent = _agent_module()
+    from tripagent.agents.service import TripService
+    from tripagent.config import get_settings
+    from tripagent.models.enums import Category
+
+    seen: list = []
+
+    class FakeChain:
+        def run(self, capability, method, city, query, **kw):
+            seen.append(query)
+            from tripagent.providers.base import ChainResult
+
+            return ChainResult(value=[], source="stub")
+
+    svc = TripService(get_settings())
+    svc.chain = FakeChain()
+    ctx = agent.Ctx(svc=svc)
+    out = agent._tool_find_places(ctx, {"city": "成都", "category": "酒吧酒馆"})
+    assert seen, "工具没走检索"
+    assert seen[0].category is Category.BAR, seen[0]
+    assert "categories" not in (seen[0].model_extra or {}), "又传了复数字段，会被静默忽略"
+
+
+def test_tool_overrunning_its_deadline_stops_the_loop(monkeypatch):
+    """60 秒只检查"步与步之间"时，一个工具就能把它冲穿（实测 108.7s）。
+    现在工具自带等待上限：到点就不等，循环立刻停下，并且已经做出来的方案照样交付。"""
+    agent = _agent_module()
+    stub = _Stub(['{"thought":"排方案","action":"build_itinerary","args":{"request_text":"成都 2天"}}',
+                  '{"thought":"交付","action":"finish","args":{"summary":"不该走到这里"}}'])
+    svc = _offline_svc(monkeypatch, agent, stub)
+
+    class _Check:
+        passed = True
+
+    class _Scorecard:
+        checks = [_Check()]
+
+        def verdict(self):
+            return "可用"
+
+    class _Plan:
+        days = [1, 2]
+        all_slots = ["a"] * 5
+        scorecard = _Scorecard()
+
+    def slow_but_done(ctx, args):
+        import time
+
+        ctx.last_plan = _Plan()   # 方案其实已经排好了，只是补图还在跑
+        time.sleep(30)
+        return {"ok": True}
+
+    monkeypatch.setitem(agent.TOOLS, "build_itinerary", slow_but_done)
+    monkeypatch.setattr(agent, "HEAVY_TOOL_CAP_S", 1.0)
+    run = agent.run_agent("成都 2天 情侣", svc=svc)
+    assert run.status == "timeout", run.status
+    assert run.signal == "forced_finish"
+    assert run.steps_used == 1, "超时后还在向模型要下一步，等于把预算花在等不来的东西上"
+    assert run.plan_ready and "已交付方案" in run.summary
+    assert run.seconds < 10, f"等待上限没生效，实际耗时 {run.seconds:.1f}s"
