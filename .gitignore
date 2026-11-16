@@ -43,3 +43,7 @@ Thumbs.db
 data/llm_usage.json
 data/lodging_model.json
 data/tencent_budget.json
+
+# AI 头图候选稿（ImageGen 中间产物，体积大）：最终头图已裁切为 static/hero.jpg，
+# 候选稿只留在本地备查，不入开源仓库
+vibe_images/

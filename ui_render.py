@@ -79,23 +79,40 @@ def slot_reason(slot: Slot, audience: str) -> str:
 
 
 def weather_panel(weather, window, alarms) -> None:
-    """天气结论：三堆分类 + 一句人话，不出现表格与毫米数。"""
+    """天气结论：三张卡片（适合户外 / 建议室内 / 不建议出行），不出现表格与毫米数。
+
+    卡片是纯 HTML（外部文本全部转义），没有交互控件，所以可以整块渲染；
+    原始逐日数据的核对入口留在 app.py 的 expander 里。
+    """
+    from html import escape as _e
+
     groups = window_verdicts(weather, window)
-    label = {"outdoor": ("🌤 适合全天户外", "success"), "indoor": ("🏛 建议以室内为主", "warning"),
-             "avoid": ("⛔ 不建议出行", "error")}
-    for key, (title, _) in label.items():
+    meta = {
+        "outdoor": ("🌤 适合全天户外", ""),
+        "indoor": ("🏛 建议以室内为主", "warn"),
+        "avoid": ("⛔ 不建议出行", "bad"),
+    }
+    cards = []
+    for key, (title, cls) in meta.items():
         rows = groups.get(key) or []
         if not rows:
             continue
-        st.markdown(f"**{title}**")
+        days = "".join(f"<i>{_e(str(v['date']))} {_e(str(v['weekday']))}</i>" for v in rows)
+        body = []
         for v in rows:
-            st.markdown(
-                f"`{v['date']} {v['weekday']}` **{v['headline']}** — {v['why']}\n\n"
-                f"　→ {v['advice']}"
+            tip = f'<div class="tip">⚕️ {_e(str(v["tips"]))}</div>' if v.get("tips") else ""
+            body.append(
+                f'<div class="row"><b>{_e(str(v["headline"]))}</b> — {_e(str(v["why"]))}'
+                f'<div class="adv">→ {_e(str(v["advice"]))}</div>{tip}</div>'
             )
-            if v.get("tips"):
-                st.caption(f"　　⚕️ {v['tips']}")
-        st.write("")
+        cards.append(
+            f'<div class="tx-wcard {cls}"><div class="glow"></div>'
+            f'<div class="t">{title}</div>'
+            f'<div class="n">{len(rows)}<small>天</small></div>'
+            f'<div class="days">{days}</div>{"".join(body)}</div>'
+        )
+    if cards:
+        st.markdown(f'<div class="tx-wgrid">{"".join(cards)}</div>', unsafe_allow_html=True)
     missing = groups.get("missing") or []
     if missing:
         st.caption(f"这些日期超出 16 天预报窗口，无法判断：{'、'.join(missing)}")
@@ -116,22 +133,29 @@ def weather_panel(weather, window, alarms) -> None:
         st.caption("当前无生效气象预警。")
 
 
-def _badge_text(s: Slot) -> str:
-    """卡片头部的徽标。文本全部来自外部接口，进 markdown 前先转义。"""
+# 活动类型 → 汉字徽章（字 + 配色组）。徽章让扫读的人一眼分清"逛/吃/玩/走/住"。
+_MEDAL = {
+    "游览": ("游", ""), "交通移动": ("行", ""), "入住退房": ("宿", ""),
+    "用餐": ("食", "meal"), "夜间娱乐": ("乐", "night"), "观看演出": ("艺", "night"),
+}
+
+
+def _badges_html(s: Slot) -> str:
+    """卡片徽标：花费 / 免费 / 价格待确认 / 预约提醒。外部文本一律转义。"""
     from html import escape as _e
 
     from tripagent.models.common import fmt_cny
 
-    bits = []
+    bits: list[tuple[str, str]] = []
     if s.cost_cents:
-        bits.append(fmt_cny(s.cost_cents))
+        bits.append(("price", fmt_cny(s.cost_cents)))
     elif s.poi and s.poi.price_cents == 0 and s.type.label != "入住退房":
-        bits.append("免费")
+        bits.append(("free", "免费"))
     elif s.poi:
-        bits.append("价格待确认")
+        bits.append(("price", "价格待确认"))
     if s.reservation_hint:
-        bits.append(f"⏰ {s.reservation_hint}")
-    return " · ".join(_e(b) for b in bits)
+        bits.append(("", f"⏰ {s.reservation_hint}"))
+    return "".join(f'<span class="tx-badge {cls}">{_e(text)}</span>' for cls, text in bits)
 
 
 def content_line(text: str, kind: str = "why") -> None:
@@ -213,41 +237,94 @@ def poem_line(s: Slot) -> None:
 
 
 def slot_block(s: Slot, audience: str, key: str) -> None:
-    """一条安排 = 图片 + 徽标 + 理由，全部用原生控件，这样才能挂点击事件。"""
+    """一条安排 = 图片 + 汉字徽章头 + 徽标 + 理由 + 诗词，全部原生控件。
+
+    容器 key 带活动分组（slot-day/meal/night-…），CSS 据此给左侧脊线着色；
+    key 里必须带天数，Slot.seq 每天从 1 重新计，跨天会撞车。
+    """
     from html import escape as _e
 
-    with st.container(border=True):
+    group = _group(s)
+    with st.container(border=True, key=f"slot-{group}-{key}"):
         if s.poi:
             photo_gallery(s.poi, key)
-        head = f"**{_e(s.title)}**"
-        badges = _badge_text(s)
-        if badges:
-            head += f" 　{badges}"
-        st.markdown(head)
+        han, cls = _MEDAL.get(s.type.label, ("游", ""))
+        st.markdown(
+            f'<div class="tx-head"><div class="tx-med {cls}">{han}</div>'
+            f'<div class="tx-title">{_e(s.title)}</div>{_badges_html(s)}</div>',
+            unsafe_allow_html=True,
+        )
         content_line(f"为什么这个时段去：{slot_reason(s, audience)}", "why")
         if s.poi and s.poi.why and not (s.extras or {}).get("audience_reason"):
             content_line(f"亮点：{s.poi.why[:90]}", "meta")
         if s.poi and s.poi.pitfalls:
             content_line("避坑：" + "；".join(s.poi.pitfalls[:2]), "pit")
         poem_line(s)
+        if group == "night" and s.poi:
+            notes = []
+            if s.poi.requires_id:
+                notes.append("需实名核验身份证")
+            if s.poi.age_policy:
+                notes.append(s.poi.age_policy)
+            notes.append("散场结伴同行，提前确认末班交通或约好返程车")
+            st.markdown(
+                f'<div class="tx-return">🌙 夜间提示：{_e("；".join(notes))}</div>',
+                unsafe_allow_html=True,
+            )
 
 
 def day_view(day: DayPlan, audience: str) -> None:
-    """一天：时段分组 → 每组一条说明 → 逐条安排卡片。"""
+    """一天 = 一条渐变时间轴：时段节点 → 每组一句说明 → 逐条安排卡片。"""
     from html import escape as _h
 
-    for band, slots in day.by_band():
-        st.markdown(
-            f'<div class="band"><div class="bandname">{_h(band)}</div></div>',
-            unsafe_allow_html=True,
-        )
-        if slots:
-            from tripagent.core.schedule_note import schedule_note
-
-            content_line(
-                schedule_note(band, slots, day.weather, BAND_NOTE.get(band, "")), "band"
+    with st.container(key=f"dayline-{day.index}"):
+        for band, slots in day.by_band():
+            groups = {_group(s) for s in slots}
+            cls = "meal" if "meal" in groups else ("night" if "night" in groups else "")
+            st.markdown(
+                f'<div class="tx-band {cls}"><i class="dot"></i>{_h(band)}</div>',
+                unsafe_allow_html=True,
             )
-        for s in slots:
-            # key 必须带天数：Slot.seq 每天从 1 重新计，只靠序号会在跨天撞车，
-            # 撞车的后果是两张卡片共享同一个翻页位置——很难查，所以在这里就堵死。
-            slot_block(s, audience, f"d{day.index}s{s.seq}")
+            if slots:
+                from tripagent.core.schedule_note import schedule_note
+
+                content_line(
+                    schedule_note(band, slots, day.weather, BAND_NOTE.get(band, "")), "band"
+                )
+            for s in slots:
+                slot_block(s, audience, f"d{day.index}s{s.seq}")
+
+
+def scorecard_view(sc) -> None:
+    """校验记分卡：环形通过率 + 三维小徽标 + 逐条清单（替代一排 st.success）。"""
+    from html import escape as _e
+
+    card = sc.scorecard()
+    pct = max(0.0, min(1.0, float(card["overall"])))
+    color = "var(--ok)" if pct >= 0.9 else ("var(--warn)" if pct >= 0.6 else "var(--bad)")
+    donut = (
+        f'<div class="tx-donut" style="background:conic-gradient({color} 0% {pct:.0%}, '
+        f'rgba(15,46,61,.08) {pct:.0%} 100%)"><b>{pct:.0%}<small> 通过</small></b></div>'
+    )
+    mini = (
+        f'<div class="tx-mini"><span>环境事实 {card["env"]:.0%}</span>'
+        f'<span>常识约束 {card["commonsense"]:.0%}</span>'
+        f'<span>用户硬约束 {card["hard"]:.0%}</span></div>'
+    )
+    rows = []
+    for c in sc.checks:
+        cls = "pass" if c.passed else "fail"
+        ic = "✓" if c.passed else "!"
+        detail = "" if c.passed else f"　{_e(c.detail)}"
+        fix = f'<span class="fix">　建议：{_e(c.fix_hint)}</span>' if (not c.passed and c.fix_hint) else ""
+        rows.append(
+            f'<div class="tx-checkrow {cls}"><div class="ic">{ic}</div>'
+            f'<span class="kind">{_e(c.kind.label)}</span>'
+            f'<p><b>{_e(c.name)}</b>{detail}{fix}</p></div>'
+        )
+    st.markdown(
+        f'<div class="tx-scoregrid"><div class="tx-donutcard">{donut}'
+        f'<div class="cap">{_e(sc.verdict())}<br>共 {len(sc.checks)} 项约束逐条校验</div></div>'
+        f'<div class="tx-checks">{mini}{"".join(rows)}</div></div>',
+        unsafe_allow_html=True,
+    )

@@ -1,16 +1,19 @@
-# Streamlit 外观配置：山水（青绿山水 + 宣纸）风格
+# Streamlit 外观配置：山海行旅（海青蓝绿 + 落日橙金）
 # 生效方式：重启 streamlit（改这个文件不会热重载）
 
 [theme]
 base = "light"
-primaryColor = "#3d6b5a"          # 石绿：主按钮、选中态
-backgroundColor = "#f6f4ec"       # 宣纸底色
-secondaryBackgroundColor = "#eaf0ea"  # 淡青：卡片底
-textColor = "#26332f"             # 松墨色
+primaryColor = "#0B7285"          # 海青：选中态与链接
+backgroundColor = "#F2F7F9"       # 雾青底色
+secondaryBackgroundColor = "#FFFFFF"  # 卡片白
+textColor = "#132A35"             # 墨青
 font = "sans serif"
 
 [server]
 headless = true
+# 头图走静态文件服务（static/hero.jpg → app/static/hero.jpg），
+# 避免每次重跑都把 400KB 图片塞进 base64。新启用需要重启一次。
+enableStaticServing = true
 
 [browser]
 gatherUsageStats = false

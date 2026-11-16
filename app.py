@@ -33,7 +33,7 @@ from tripagent.models.common import precip_level, temp_span
 from tripagent.models.enums import Interest
 from tripagent.models.request import Party
 
-st.set_page_config(page_title="TripAgent · 专属旅行规划", page_icon="🧭", layout="wide")
+st.set_page_config(page_title="TripAgent · 山海行旅", page_icon="🧭", layout="wide")
 ui_theme.inject()
 
 CITY_INDEX = sorted(all_cities(), key=lambda c: (c.level != "city", c.name))
@@ -56,8 +56,7 @@ def _offline_flag() -> bool:
     return bool(st.session_state.get("offline", False))
 
 
-def _inputs() -> dict:
-    st.markdown("### 想去哪儿玩")
+def _inputs(free_text: str) -> dict:
     col1, col2, col3, col4 = st.columns([2, 1, 1.4, 1.2])
     with col1:
         # 自由输入而不是下拉：全国 3600 多个县市区 + 乡镇（乡镇走地理编码）
@@ -88,7 +87,6 @@ def _inputs() -> dict:
 
     interests = st.multiselect("兴趣偏好", list(INTEREST_OPTIONS), default=[], placeholder="可多选：美食探店 / 夜生活 / 亲子遛娃…")
     nightlife = st.checkbox("安排夜生活（酒吧 / KTV / 演出）", value=False)
-    free_text = st.text_input("或者直接说一句话（会覆盖上面的部分选项）", placeholder="成都 3天 带爸妈 爱吃火锅 预算3000 想蹦迪")
     from tripagent.core.audience import Audience, detect_audience
 
     guess, why = detect_audience(" ".join([raw_city, free_text]), Party(adults=int(adults)))
@@ -102,12 +100,12 @@ def _inputs() -> dict:
     )
 
     return dict(city=city, days=days, start=start, pace=pace, budget=budget, audience=audience, adults=int(adults),
-                kids=int(kids), elders=int(elders), interests=interests, nightlife=nightlife, free_text=free_text)
+                kids=int(kids), elders=int(elders), interests=interests, nightlife=nightlife)
 
 
-def _build_text(p: dict) -> str:
-    if p["free_text"].strip():
-        return p["free_text"].strip()
+def _build_text(p: dict, free_text: str) -> str:
+    if free_text.strip():
+        return free_text.strip()
     bits = [p["city"], f"{p['days']}天", f"{p['start']:%m月%d日}出发"]
     if p["budget"]:
         bits.append(f"预算{p['budget']}元")
@@ -139,7 +137,7 @@ def _render_weather(outcome: PlanOutcome) -> None:
     req = outcome.request
     horizon = max(1, req.days) + 2
     window = [req.start_date + timedelta(days=i) for i in range(req.days)] if req.start_date else []
-    st.markdown(f"### {req.start_date:%m月%d日}起 {req.days} 天天气与出行建议")
+    ui_theme.section("壹", "天气与出行建议", f"{req.start_date:%m月%d日}起 {req.days} 天 · 先看天，再论行程")
     ui_render.weather_panel(w, window or [f.date for f in w.forecast[: req.days]], w.alarms)
     shown = min(len(window or w.forecast), horizon)
     with st.expander(f"看这 {shown} 天的原始逐日数据（需要核对的人用得上）"):
@@ -167,11 +165,12 @@ def _render_plan(outcome: PlanOutcome) -> None:
         st.warning(e)
     if plan.blocking_advice:
         st.error(f"**⛔ {plan.blocking_advice}**")
-    st.markdown(f"### 为你生成的行程 · {plan.request.describe()}")
+    ui_theme.section("贰", "为你生成的行程", plan.request.describe())
     if plan.narrative:
         st.info(plan.narrative)
 
-    tabs = st.tabs([d.day_label for d in plan.days] + ["预算与清单", "校验记分卡"])
+    with st.container(key="daytabs"):
+        tabs = st.tabs([d.day_label for d in plan.days] + ["预算与清单", "校验记分卡"])
     for day, tab in zip(plan.days, tabs[:-2]):
         with tab:
             from tripagent.models.common import fmt_cny
@@ -272,17 +271,7 @@ def _render_plan(outcome: PlanOutcome) -> None:
         if not sc:
             st.info("未执行校验")
         else:
-            m1, m2, m3, m4 = st.columns(4)
-            card = sc.scorecard()
-            m1.metric("总体通过率", f"{card['overall']:.0%}", sc.verdict())
-            m2.metric("环境事实", f"{card['env']:.0%}")
-            m3.metric("常识约束", f"{card['commonsense']:.0%}")
-            m4.metric("用户硬约束", f"{card['hard']:.0%}")
-            for c in sc.checks:
-                line = f"{'✅' if c.passed else '⚠️'} **{c.name}** · {c.kind.label}"
-                if not c.passed:
-                    line += f"\n\n　{c.detail}" + (f"\n\n　建议：{c.fix_hint}" if c.fix_hint else "")
-                (st.success if c.passed else st.warning)(line)
+            ui_render.scorecard_view(sc)
         if plan.warnings:
             for wtext in plan.warnings:
                 st.warning(wtext)
@@ -316,29 +305,69 @@ def _gate(svc: TripService):
 
 
 def _render_login(gate) -> None:
-    st.markdown("### 体验入口")
-    if gate.reason:
-        st.info(gate.reason)
-    code = st.text_input("体验口令", type="password", placeholder="由主办方发放")
-    if st.button("进入", type="primary"):
-        st.session_state["accessInput"] = code.strip()
-        st.rerun()
-    st.caption("本作品为天池 2026 Qoder 高校创造力大赛演示，联网规划会消耗模型额度，因此需要口令。")
+    with st.container(key="searchcard", border=True):
+        st.markdown('<div class="tx-lab">体验入口 · 输入口令解锁规划</div>', unsafe_allow_html=True)
+        if gate.reason:
+            st.info(gate.reason)
+        c1, c2 = st.columns([4.6, 1.4])
+        with c1:
+            code = st.text_input("体验口令", type="password", placeholder="由主办方发放")
+        with c2:
+            entered = st.button("进入", type="primary", width="stretch")
+        if entered:
+            st.session_state["accessInput"] = code.strip()
+            st.rerun()
+        st.markdown(
+            '<div class="tx-note">天池 2026 Qoder 高校创造力大赛演示 · 联网规划消耗全站共享的模型额度，因此需要口令。</div>',
+            unsafe_allow_html=True,
+        )
+
+
+def _use_example(ex: str) -> None:
+    """快捷灵感 chip 的回调：在下一轮控件实例化之前写入，避免 widget 状态冲突。"""
+    st.session_state["freeText"] = ex
 
 
 def tab_plan(svc: TripService, can_run: bool = True) -> None:
     import time as _time
 
-    p = _inputs()
-    text = _build_text(p)
     waited = _time.time() - float(st.session_state.get("lastPlanAt", 0))
     cooling = max(0, PLAN_COOLDOWN_S - int(waited))
-    if cooling:
-        st.caption(f"两次规划之间请等 {cooling} 秒：模型额度是全站点共享的，这条限制防止单个人反复刷。")
-    if not can_run:
-        st.warning("今日模型额度已用完，联网规划已暂停；「关于」页可看到今日用量，天气速查不受影响。")
-    if st.button("开始规划", type="primary", width="stretch",
-                 disabled=cooling > 0 or not can_run):
+
+    # 头图只挂在规划页：搜索卡要压住头图下缘，中间不能隔着页签栏
+    ui_theme.hero()
+    with st.container(key="searchcard", border=True):
+        st.markdown('<div class="tx-lab">想去哪儿 · 说一句话就够了</div>', unsafe_allow_html=True)
+        c1, c2 = st.columns([4.6, 1.4])
+        with c1:
+            free_text = st.text_input(
+                "一句话描述", key="freeText", label_visibility="collapsed",
+                placeholder="成都 3天 带爸妈 爱吃火锅 预算3000 想蹦迪",
+            )
+        with c2:
+            go = st.button("开始规划", type="primary", width="stretch",
+                           disabled=cooling > 0 or not can_run)
+        if cooling:
+            st.caption(f"两次规划之间请等 {cooling} 秒：模型额度是全站点共享的，这条限制防止单个人反复刷。")
+        if not can_run:
+            st.warning("今日模型额度已用完，联网规划已暂停；「关于」页可看到今日用量，天气速查不受影响。")
+        st.markdown(
+            '<div class="tx-note">支持全国 3600+ 县市区与乡镇 · 先查 16 天预报再排行程 · '
+            '每条推荐可回溯数据源 · 展开下方「自定义条件」可精确控制天数 / 预算 / 同行人</div>',
+            unsafe_allow_html=True,
+        )
+
+    with st.container(key="quickchips"):
+        examples = ["成都 3天 带小孩 爱吃火锅", "长沙 2天 朋友团玩 想蹦迪",
+                    "哈尔滨 4天 情侣 预算4000", "厦门 3天 带爸妈 节奏休闲"]
+        cols = st.columns(len(examples))
+        for col, ex in zip(cols, examples):
+            col.button(ex, key=f"chip:{ex[:4]}", on_click=_use_example, args=(ex,))
+
+    with st.expander("自定义条件（城市 / 天数 / 日期 / 预算 / 同行人 / 兴趣）"):
+        p = _inputs(free_text)
+    text = _build_text(p, free_text)
+    if go:
         with st.spinner("正在查天气、抓预警、检索地点、装配行程、逐条校验……"):
             outcome = svc.plan_trip(text)
         st.session_state["lastPlanAt"] = _time.time()
@@ -355,10 +384,15 @@ def tab_plan(svc: TripService, can_run: bool = True) -> None:
 
 
 def tab_ask(svc: TripService, can_run: bool = True) -> None:
-    st.markdown("### 即时问一句：酒吧 / KTV / 游乐园 / 演出 / 夜市…")
-    text = st.text_input("问题", placeholder="成都有哪些评分高、性价比好的清吧？最好离春熙路近")
-    top = st.slider("推荐几个", 3, 10, 5)
-    if st.button("问一问", type="primary", disabled=not can_run) and text.strip():
+    ui_theme.section("问", "即时问一句", "酒吧 / KTV / 游乐园 / 演出 / 夜市…")
+    with st.container(border=True, key="askbox"):
+        text = st.text_input("问题", placeholder="成都有哪些评分高、性价比好的清吧？最好离春熙路近")
+        c1, c2 = st.columns([3, 1])
+        with c1:
+            top = st.slider("推荐几个", 3, 10, 5)
+        with c2:
+            asked = st.button("问一问", type="primary", width="stretch", disabled=not can_run)
+    if asked and text.strip():
         st.session_state["answer"] = svc.ask(text.strip(), limit=top)
     ans = st.session_state.get("answer")
     if not ans:
@@ -368,20 +402,27 @@ def tab_ask(svc: TripService, can_run: bool = True) -> None:
         for wtext in ans.warnings:
             st.warning(wtext)
         return
+    from html import escape as _e
+
     st.markdown(f"**{ans.city} · {ans.category}**")
     st.success(ans.summary)
-    for r in ans.items:
-        with st.container(border=True):
+    for i, r in enumerate(ans.items):
+        with st.container(border=True, key=f"askitem-{i}"):
             if r.poi.photos:
                 ui_render.photo_gallery(r.poi, f"ask:{r.poi.name[:12]}")
-            head = f"**{r.poi.name}** · {r.poi.category.label}"
+            badges = []
             if r.poi.rating:
-                head += f" · 评分 {r.poi.rating}"
+                badges.append(f'<span class="tx-badge">★ {r.poi.rating}</span>')
             if r.poi.avg_cost_cents or r.poi.ticket_cents:
-                head += f" · 人均 ¥{(r.poi.avg_cost_cents or r.poi.ticket_cents) / 100:.0f}"
+                badges.append(f'<span class="tx-badge price">人均 ¥{(r.poi.avg_cost_cents or r.poi.ticket_cents) / 100:.0f}</span>')
             if r.poi.open_hours_raw:
-                head += f" · 营业 {r.poi.open_hours_raw}"
-            st.markdown(head)
+                badges.append(f'<span class="tx-badge">营业 {_e(r.poi.open_hours_raw)}</span>')
+            st.markdown(
+                f'<div class="tx-head"><div class="tx-med night">荐</div>'
+                f'<div class="tx-title">{_e(r.poi.name)}</div>'
+                f'<span class="tx-badge">{_e(r.poi.category.label)}</span>{"".join(badges)}</div>',
+                unsafe_allow_html=True,
+            )
             if r.poi.district or r.poi.metro:
                 st.caption(f"{r.poi.district} {('· 地铁 ' + r.poi.metro) if r.poi.metro else ''}")
             if r.reasons:
@@ -397,27 +438,50 @@ def tab_ask(svc: TripService, can_run: bool = True) -> None:
 
 
 def tab_history(svc: TripService) -> None:
-    st.markdown("### 历史行程")
+    from html import escape as _e
+
+    ui_theme.section("拾", "历史行程", "生成一次就自动落库，随时回看与下载")
     store = TripStore(svc.settings)
     rows = store.list(30)
     if not rows:
         st.info("还没有保存过行程。生成一次行程会自动落库。")
         return
-    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
-    tid = st.selectbox("选择 trip_id", [r["trip_id"] for r in rows])
-    plan = store.load(tid)
-    if not plan:
-        st.warning("这份历史数据读不出来（可能结构已升级）。重新生成一次即可。")
-        return
-    c1, c2 = st.columns([1, 2])
-    if c1.button("重新载入这份行程", type="primary"):
-        st.session_state["outcome"] = PlanOutcome(request=plan.request, plan=plan)
-        st.success("已载入，切到「行程规划」页查看。")
-    st.markdown("**下载这份行程**")
-    _export_block(plan, svc, tid)
+    cols = st.columns(3)
+    for i, r in enumerate(rows[:9]):
+        with cols[i % 3]:
+            with st.container(border=True, key=f"histcard-{i}"):
+                st.markdown(
+                    f'<div class="tx-cover c{i % 3}"><b>{_e(str(r["city"] or "行程"))}</b></div>',
+                    unsafe_allow_html=True,
+                )
+                meta = [f'{r["days"]} 天', str(r["created_at"])[:10]]
+                if r.get("budget_cents"):
+                    meta.append(f'预算 ¥{r["budget_cents"] / 100:.0f}')
+                if r.get("note"):
+                    meta.append(str(r["note"]))
+                st.markdown(
+                    '<div class="tx-meta">' + "".join(f"<i>{_e(m)}</i>" for m in meta) + "</div>",
+                    unsafe_allow_html=True,
+                )
+                if st.button("载入这份行程", key=f"load:{r['trip_id']}", width="stretch"):
+                    plan = store.load(r["trip_id"])
+                    if plan:
+                        st.session_state["outcome"] = PlanOutcome(request=plan.request, plan=plan)
+                        st.session_state["histPlan"] = plan
+                        st.session_state["histTid"] = r["trip_id"]
+                        st.success("已载入，切到「行程规划」页查看。")
+                    else:
+                        st.warning("这份历史数据读不出来（可能结构已升级）。重新生成一次即可。")
+    if len(rows) > 9:
+        st.caption(f"仅展示最近 9 份，共 {len(rows)} 份。")
+    plan = st.session_state.get("histPlan")
+    if plan:
+        st.markdown("**下载最近载入的行程**")
+        _export_block(plan, svc, st.session_state.get("histTid", "trip"))
 
 
 def tab_about(svc: TripService) -> None:
+    ui_theme.section("鉴", "关于 TripAgent", "会看天气 · 有据可查 · 逐条校验")
     st.markdown(
         "**它和其他 AI 旅行攻略的差别**\n\n"
         "1. 天气不是装饰：极端天气会直接给「不建议出行」结论并推荐改期窗口，可救的情况自动把户外换成室内；\n"
@@ -463,15 +527,16 @@ def tab_about(svc: TripService) -> None:
 
 
 def main() -> None:
-    ui_theme.hero()
+    ui_theme.brand()
     svc = _service(_offline_flag())
     gate = _gate(svc)
     if not gate.allowed:
+        ui_theme.hero()
         _render_login(gate)
         return
     if gate.enabled and gate.who == "owner":
         st.caption("站长身份：即使今日额度用完也可继续使用。")
-    t1, t2, t3, t4 = st.tabs(["🗺️ 行程规划", "🎈 即时问答", "🗂 历史", "ℹ️ 关于"])
+    t1, t2, t3, t4 = st.tabs(["🗺️ 行程规划", "🍸 即时问答", "🧳 历史行程", "🧭 关于"])
     with t1:
         tab_plan(svc, gate.costly_allowed)
     with t2:
