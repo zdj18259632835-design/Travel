@@ -1,23 +1,3 @@
----
-# 魔搭创空间（ModelScope Studio）元数据：删掉这段就变回普通 README
-# 运行方式选的是 Streamlit（平台直接跑根目录 app.py + requirements.txt）。
-# 想切回 Docker 就把 sdk 改成 docker 并加回 app_port: 7860，仓库里的 Dockerfile 随时可用。
-title: TripAgent 山水行旅 · 会看天气的旅行管家
-emoji: 🧭
-colorFrom: green
-colorTo: gray
-sdk: streamlit
-pinned: false
-license: apache-2.0
-domain: lifestyle
-tags:
-  - travel
-  - agent
-  - streamlit
-  - weather
-short_description: 说人话就能拿到会避开极端天气、每条推荐都有依据的专属行程
----
-
 # TripAgent · 会看天气的生活娱乐旅行管家
 
 > 天池 2026 Qoder 高校创造力大赛 · **LifeHack 生活娱乐** 赛道参赛作品
@@ -27,13 +7,17 @@ short_description: 说人话就能拿到会避开极端天气、每条推荐都�
 
 ## 1. 三分钟跑起来（先看这个）
 
-**用什么软件打开**：直接用 **Qoder**（本对话所在的 IDE，VS Code 内核）打开本目录即可——内置终端、可断点调试、无需再装 Visual Studio。
+**用什么软件打开**：直接用 **Qoder**（VS Code 内核的 AI IDE）打开本目录即可——内置终端、可断点调试、无需再装 Visual Studio。
 配置已写在 [.vscode/launch.json](.vscode/launch.json)，按 `F5` 就能带调试启动。
 
-**环境**：Python 3.12（本机已装），依赖全部装在**项目内 `.venv`**，不污染系统 Python。
+**环境**：Python 3.12（需自行安装），依赖全部装在**项目内 `.venv`**，不污染系统 Python。
 
 ```bash
-# 在项目根目录 D:\APP_develop\qoder-agent-develop\travel-agent 下
+# 第一次运行：建虚拟环境并装依赖（只需一次；已有 .venv 就跳过这两行）
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+
+# 在项目根目录下
 # —— 网页版（推荐，演示效果最好）——
 .venv\Scripts\python.exe -m streamlit run app.py
 
@@ -76,11 +60,11 @@ AMAP_KEY=xxxxxxxx                # 高德 Web 服务：任意城市实时 POI（
 
 ## 2. 主程序在哪里
 
-| 入口 | 文件 | 说明 |
-|---|---|---|
-| **网页版** | [app.py](app.py) | Streamlit，5 个页签：行程规划 / 即时问答 / 数据源自检 / 历史 / 关于 |
-| **命令行版** | [src/tripagent/cli.py](src/tripagent/cli.py) | `plan / ask / weather / doctor / cities / history / show / demo` |
-| **核心引擎（被上面两者调用）** | [src/tripagent/agents/service.py](src/tripagent/agents/service.py) | `TripService.plan_trip()` / `.ask()` / `.doctor()` |
+| 入口                | 文件                                                                 | 说明                                                               |
+| ----------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------- |
+| **网页版**           | [app.py](app.py)                                                   | Streamlit，5 个页签：行程规划 / 即时问答 / 数据源自检 / 历史 / 关于                    |
+| **命令行版**          | [src/tripagent/cli.py](src/tripagent/cli.py)                       | `plan / ask / weather / doctor / cities / history / show / demo` |
+| **核心引擎（被上面两者调用）** | [src/tripagent/agents/service.py](src/tripagent/agents/service.py) | `TripService.plan_trip()` / `.ask()` / `.doctor()`               |
 
 `python -m tripagent.cli` 与直接 `python src/tripagent/cli.py` 等价；已在 `pyproject.toml` 里注册了 `tripagent` 命令名。
 
