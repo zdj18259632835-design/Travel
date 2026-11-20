@@ -97,19 +97,20 @@ def weather_panel(weather, window, alarms) -> None:
         rows = groups.get(key) or []
         if not rows:
             continue
-        days = "".join(f"<i>{_e(str(v['date']))} {_e(str(v['weekday']))}</i>" for v in rows)
-        body = []
+        cols = []
         for v in rows:
             tip = f'<div class="tip">⚕️ {_e(str(v["tips"]))}</div>' if v.get("tips") else ""
-            body.append(
-                f'<div class="row"><b>{_e(str(v["headline"]))}</b> — {_e(str(v["why"]))}'
+            cols.append(
+                f'<div class="wcol"><div class="wd">{_e(str(v["date"]))} {_e(str(v["weekday"]))}</div>'
+                f'<div class="row"><b>{_e(str(v["headline"]))}</b>'
+                f'<span class="why">{_e(str(v["why"]))}</span></div>'
                 f'<div class="adv">→ {_e(str(v["advice"]))}</div>{tip}</div>'
             )
         cards.append(
             f'<div class="tx-wcard {cls}"><div class="glow"></div>'
-            f'<div class="t">{title}</div>'
-            f'<div class="n">{len(rows)}<small>天</small></div>'
-            f'<div class="days">{days}</div>{"".join(body)}</div>'
+            f'<div class="whead"><div class="t">{title}</div>'
+            f'<div class="n">{len(rows)}<small>天</small></div></div>'
+            f'<div class="wcols">{"".join(cols)}</div></div>'
         )
     if cards:
         st.markdown(f'<div class="tx-wgrid">{"".join(cards)}</div>', unsafe_allow_html=True)

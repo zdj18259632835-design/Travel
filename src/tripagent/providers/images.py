@@ -166,10 +166,12 @@ def scene_signals(data: bytes) -> dict:
             "color": round(color, 4)}
 
 
-def score_url(url: str, timeout: float = 6.0) -> list | None:
+def score_url(url: str, timeout: float = 4.0) -> list | None:
     """下载并打分：[宽, 高, 拉普拉斯方差, 灰白占比, 天空或植被, 色彩丰富度]。
 
     拿不到字节时返回 None（调用方按"未知"处理，不误杀）。
+    超时从 6s 收到 4s：慢链/死链以前会占住打分线程整整 6 秒，是长尾耗时的主因；
+    而"没量到"在两道闸门里都按保留处理，收超时只减少测量、不会误删好图。
     """
     try:
         r = httpx.get(url, timeout=timeout, follow_redirects=True,
@@ -264,8 +266,10 @@ class AMapImages(Provider):
             except Exception:
                 return []
 
-        # 12 路：一次预筛要下 60-100 张图，8 路实测把这段拖到 21.6s，成了整条流水线的新瓶颈
-        with ThreadPoolExecutor(max_workers=min(12, len(todo))) as pool:
+        # 24 路纯 I/O 并发：12 路时一次冷启动预筛（72 张）实测 54s，占整趟规划的大头。
+        # 下载是带宽/延迟受限而非 CPU 受限，加倍线程数直接把这段墙钟时间砍半；
+        # 单张超时已收到 4s，死链不会再长时间占住线程。
+        with ThreadPoolExecutor(max_workers=min(24, len(todo))) as pool:
             results = list(pool.map(scored, todo))
         return {u: got for u, got in zip(todo, results) if got}
 

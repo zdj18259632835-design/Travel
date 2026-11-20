@@ -381,6 +381,10 @@ def tab_plan(svc: TripService, can_run: bool = True) -> None:
     if outcome:
         _render_weather(outcome)
         _render_plan(outcome)
+        if outcome.timings:
+            total = outcome.timings.get("总计", "?")
+            with st.expander(f"本次耗时分布（总计 {total}s）"):
+                st.caption(" ｜ ".join(f"{k} {v}s" for k, v in outcome.timings.items()))
 
 
 def tab_ask(svc: TripService, can_run: bool = True) -> None:

@@ -252,37 +252,42 @@ div[data-testid="stAlert"] { border-radius:12px; border-width:0 0 0 4px; }
 [data-testid="stDataFrame"] { border-radius:14px; overflow:hidden; border:1px solid rgba(15,46,61,.08); }
 hr { border-color:rgba(15,46,61,.10); }
 
-/* ---------- 天气结论：三张卡（适合户外 / 建议室内 / 不建议出行） ---------- */
-.tx-wgrid { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin:10px 0 4px; }
+/* ---------- 天气结论：整行宽卡 + 每天一列（宽屏铺满，不空右边） ---------- */
+.tx-wgrid { display:flex; flex-direction:column; gap:14px; margin:10px 0 4px; }
 .tx-wcard {
     position:relative; overflow:hidden; background:#fff; border-radius:16px;
     border:1px solid rgba(15,46,61,.07); border-top:4px solid var(--ok);
-    box-shadow:var(--shadow); padding:16px 16px 12px;
+    box-shadow:var(--shadow); padding:18px 20px 16px;
 }
 .tx-wcard.warn { border-top-color:var(--warn); }
 .tx-wcard.bad { border-top-color:var(--bad); }
 .tx-wcard .glow {
-    position:absolute; right:-30px; top:-30px; width:110px; height:110px;
-    border-radius:50%; filter:blur(30px); opacity:.30; background:var(--ok); pointer-events:none;
+    position:absolute; right:-30px; top:-30px; width:130px; height:130px;
+    border-radius:50%; filter:blur(34px); opacity:.28; background:var(--ok); pointer-events:none;
 }
 .tx-wcard.warn .glow { background:var(--warn); }
 .tx-wcard.bad .glow { background:var(--bad); }
-.tx-wcard .t { font-size:13px; font-weight:700; letter-spacing:.08em; color:var(--sub); }
-.tx-wcard .n { font-family:var(--serif); font-size:26px; color:var(--navy); margin:2px 0 8px; }
-.tx-wcard .n small { font-size:13px; color:var(--sub); font-family:var(--sans); margin-left:6px; }
-.tx-wcard .days { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:10px; }
-.tx-wcard .days i {
-    font-style:normal; font-size:12px; padding:3px 10px; border-radius:999px;
-    background:rgba(47,158,110,.10); color:#22795A; border:1px solid rgba(47,158,110,.25);
-}
-.tx-wcard.warn .days i { background:rgba(232,160,19,.12); color:#9A6B00; border-color:rgba(232,160,19,.35); }
-.tx-wcard.bad .days i { background:rgba(224,49,49,.10); color:#C92A2A; border-color:rgba(224,49,49,.30); }
-.tx-wcard .row { border-top:1px dashed rgba(15,46,61,.10); padding:8px 0 2px; font-size:13.5px; color:var(--ink); line-height:1.55; }
-.tx-wcard .row b { color:var(--navy); }
-.tx-wcard .row .adv { color:var(--teal); }
-.tx-wcard .row .tip { color:var(--sub); font-size:12.5px; }
+.tx-wcard .whead { display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; margin-bottom:14px; }
+.tx-wcard .t { font-size:15px; font-weight:700; letter-spacing:.06em; color:var(--sub); }
+.tx-wcard .n { font-family:var(--serif); font-size:30px; color:var(--navy); line-height:1; }
+.tx-wcard .n small { font-size:14px; color:var(--sub); font-family:var(--sans); margin-left:6px; }
+/* flex 而不是 grid：auto-fit 在"这组只有 1 天"时会留下 0px 幽灵轨道，
+   它的 gap 仍占 18px，右缘白白缩进一条；flex 伸缩没有这个问题 */
+.tx-wcard .wcols { display:flex; flex-wrap:wrap; gap:18px; }
+.tx-wcard .wcol { flex:1 1 260px; min-width:0; border-left:3px solid rgba(15,46,61,.08); padding-left:16px; }
+.tx-wcard .wcol:first-child { border-left:none; padding-left:0; }
+.tx-wcard .wd { font-size:14px; font-weight:700; color:var(--navy); letter-spacing:.04em; margin-bottom:6px; }
+.tx-wcard .row { font-size:15px; color:var(--ink); line-height:1.6; }
+.tx-wcard .row b { color:var(--navy); font-size:16px; }
+.tx-wcard .row .why { display:block; color:var(--sub); font-size:13.5px; line-height:1.55; margin-top:3px; }
+.tx-wcard .adv { color:var(--teal); font-size:15px; line-height:1.6; margin-top:8px; }
+.tx-wcard .tip { color:var(--sub); font-size:13.5px; line-height:1.55; margin-top:8px; }
 .tx-alarms { margin-top:10px; }
-@media (max-width:860px) { .tx-wgrid { grid-template-columns:1fr; } }
+@media (max-width:860px) {
+    .tx-wcard .wcols { flex-direction:column; gap:12px; }
+    .tx-wcard .wcol { border-left:none; padding-left:0; border-top:1px dashed rgba(15,46,61,.10); padding-top:12px; }
+    .tx-wcard .wcol:first-child { border-top:none; padding-top:0; }
+}
 
 /* ---------- 一天的时间轴 ---------- */
 div[class*="st-key-dayline"] { position:relative; padding-left:34px; }
